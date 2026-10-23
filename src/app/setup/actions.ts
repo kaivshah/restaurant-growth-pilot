@@ -2,8 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { enqueueDraftJob, processDraftJobs } from "@/lib/drafts";
 import { REPORT_LABELS, parseReportFile } from "@/lib/reports";
 import type { ReportType } from "@/lib/reports";
 import { getRestaurant, requireRestaurant, requireUserId } from "@/lib/restaurant";
@@ -136,6 +138,11 @@ export async function confirmNumbers(formData: FormData) {
     });
   }
   revalidatePath("/setup/reports");
+  if (flaggedTypes.size === 0 && restaurant.setupCompletedAt) {
+    // Setup is already done, so new numbers mean fresh offer ideas.
+    await enqueueDraftJob(restaurant.id);
+    after(() => processDraftJobs());
+  }
   redirect(flaggedTypes.size > 0 ? "/setup/reports?flagged=1" : "/setup/menu");
 }
 
@@ -161,5 +168,8 @@ export async function saveRules(_prev: FormState, formData: FormData): Promise<F
       setupCompletedAt: restaurant.setupCompletedAt ?? new Date(),
     },
   });
+  // Rules may have changed which offers are allowed; rebuild drafts in the background.
+  await enqueueDraftJob(restaurant.id);
+  after(() => processDraftJobs());
   redirect("/inbox");
 }

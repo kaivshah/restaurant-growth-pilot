@@ -90,6 +90,9 @@ model Restaurant {
   setupCompletedAt      DateTime?
   outlets               Outlet[]
   reports               ReportUpload[]
+  drafts                Draft[]
+  draftJobs             DraftJob[]
+  llmCalls              LlmCall[]
   createdAt             DateTime       @default(now())
   updatedAt             DateTime       @updatedAt
 
@@ -127,4 +130,97 @@ model ReportUpload {
   createdAt    DateTime     @default(now())
 
   @@index([restaurantId, reportType, periodEnd])
+}
+
+// ---------- Drafts (milestone 2) ----------
+
+enum DraftKind {
+  CUSTOMER_OFFER
+  CATERING_PITCH
+}
+
+enum DraftStatus {
+  PENDING   // waiting in the Approval Inbox
+  APPROVED
+  SKIPPED
+}
+
+/// One suggestion in the Approval Inbox. Numbers come from the owner's
+/// confirmed reports; only headline and body are written by the LLM.
+model Draft {
+  id           String      @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  kind         DraftKind   @default(CUSTOMER_OFFER)
+  /// Which offer rule produced it, e.g. "welcome", "afternoon-drink"
+  offerKey     String
+  category     String
+  title        String
+  schedule     String
+  why          String
+  audience     String
+  cost         String
+  measure      String
+  /// Rule checks shown as ticks, e.g. ["Free extra, no price cut"]
+  checks       String[]
+  /// Supporting data for the detail panel (e.g. hourly sales bars)
+  evidence     Json?
+  copyLabel    String
+  headline     String
+  body         String
+  /// Who wrote headline/body: "template", "ollama:<model>", "anthropic:<model>"
+  writtenBy    String
+  /// Hash of the facts sent to the writer; the same facts are never drafted twice
+  factsHash    String
+  rewriteCount Int         @default(0)
+  status       DraftStatus @default(PENDING)
+  skipReason   String?
+  decidedAt    DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([restaurantId, factsHash])
+  @@index([restaurantId, status])
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// Background work to (re)build a restaurant's drafts. Processed one at a time per restaurant.
+model DraftJob {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  status       JobStatus  @default(QUEUED)
+  message      String?
+  createdAt    DateTime   @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([restaurantId, status])
+}
+
+/// One row per call to an LLM provider, for cost and error tracking.
+model LlmCall {
+  id           String      @id @default(cuid())
+  restaurantId String?
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: SetNull)
+  provider     String
+  model        String
+  purpose      String
+  /// "ok", "retried-ok", "error", "invalid-output"
+  outcome      String
+  attempts     Int
+  inputTokens  Int?
+  outputTokens Int?
+  durationMs   Int
+  error        String?
+  createdAt    DateTime    @default(now())
+
+  @@index([restaurantId, createdAt])
 }
