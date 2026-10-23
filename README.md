@@ -6,6 +6,35 @@ Name not decided yet, so the app calls itself **product**.
 
 ## What works now
 
+### Milestone 2.5: the AI analyst
+
+Turn it on with `ANALYST_PROVIDER` and the AI takes part in **deciding** what to offer, not just writing the email.
+
+1. **It explores the data itself.** It uses read-only tools (`src/lib/analyst/tools.ts`) over everything the owner uploaded:
+   - weekly summaries and sales by hour, by day and by part of the day
+   - week-over-week comparisons
+   - inventory usage and item costs
+   - bread over/short and existing discounts
+   - the owner's rules and past approve/skip decisions
+
+   Rent, labor, royalties and profit are not exposed. Google data (nearby businesses, events, weather) will plug in as more tools in milestone 3.
+2. **It decides.** It submits findings ("AI found this week") and up to 5 offer proposals: mechanic, item, days, hours, value, expected effect and confidence. It also decides whether to keep, change or drop each standard idea.
+3. **Code verifies everything** (`src/lib/analyst/verify.ts`) before anything reaches the inbox:
+   - Every cited number must equal what the cited tool returned, and every $ or % in the text must match the data.
+   - Offers must stay within the discount limit, use only allowed offer types, follow brand-safe mode (free extras only) and run within the store's sales hours.
+   - Near-duplicates and previously decided ideas are dropped.
+   - Anything that fails is logged with its reasons on the **How the AI decided** page (`/inbox/analysis/<id>`).
+4. **It learns over time.** Past approvals and skip reasons are given to the analyst on each run. A run is reused while the reports, rules and decisions are unchanged, so you don't pay twice.
+
+| Setting | Notes |
+|---|---|
+| `ANALYST_PROVIDER=off` (default) | Standard rule ideas only |
+| `ANALYST_PROVIDER=anthropic` | `ANALYST_MODEL`: `claude-opus-5-5` (best, about $0.20–0.40 a run), `claude-sonnet-5-5` (about $0.10–0.20), `claude-haiku-5-5` (about $0.01). Opus 5.5 and Sonnet 5.5 runs use Claude's server-side fallback if a request is declined |
+| `ANALYST_PROVIDER=ollama` | Free and local. Needs a model with tool calling (e.g. `qwen2.5:7b-instruct`); small models are less reliable, and the checks will block more of their ideas |
+| `ANALYST_PROVIDER=fake` | Development only: a scripted analyst for trying the flow without a model |
+
+Each run is stored in `AnalysisRun`: findings, accepted and rejected ideas, the decisions on standard ideas, every tool call, tokens and estimated cost.
+
 ### Milestone 2: offer ideas in the Approval Inbox
 
 After setup, the app turns the owner's confirmed reports into offer ideas, each with the numbers behind it and editable copy:
@@ -88,6 +117,7 @@ Real store reports go in `fixtures/private/`, which git ignores. When files are 
 | `src/lib/insights/` | Calculations from confirmed reports |
 | `src/lib/offers/` | Offer ideas and brand-rule checks |
 | `src/lib/llm/` | Copywriter providers (template, Ollama, Claude), retries, output checks |
+| `src/lib/analyst/` | AI analyst: data tools, the tool-use loop (Claude, Ollama, scripted), checks and conversion to offers |
 | `src/lib/drafts/` | Background job that builds drafts and logs AI calls |
 | `src/app/setup/` | The four setup steps and their server actions |
 | `src/app/inbox/` | Approval Inbox |

@@ -3,12 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { db } from "@/lib/db";
-import { REWRITE_LIMIT, enqueueDraftJob, logCall, packetFor, processDraftJobs } from "@/lib/drafts";
-import { computeInsights } from "@/lib/insights";
+import { REWRITE_LIMIT, enqueueDraftJob, logCall, processDraftJobs } from "@/lib/drafts";
 import { providerFromEnv, rewriteOfferCopy } from "@/lib/llm";
 import { LIMITS } from "@/lib/llm/validate";
-import { buildOffers } from "@/lib/offers";
-import type { ParsedReport } from "@/lib/reports";
+import { isBrandSafe } from "@/lib/offers";
 import { requireRestaurant } from "@/lib/restaurant";
 
 async function ownDraft(id: string) {
@@ -59,7 +57,7 @@ export async function saveDraftCopy(_prev: CopyState, formData: FormData): Promi
   if (!headline || !body) return { error: "The headline and message can't be empty.", headline, body };
   if (headline.length > LIMITS.headline) return { error: `Keep the headline under ${LIMITS.headline} characters.`, headline, body };
   if (body.length > LIMITS.body) return { error: `Keep the message under ${LIMITS.body} characters.`, headline, body };
-  if (draft.body.includes("[CODE]") && !body.includes("[CODE]")) {
+  if ((draft.needsCode || draft.body.includes("[CODE]")) && !body.includes("[CODE]")) {
     return { error: "Keep [CODE] in the message. It's replaced with each customer's redemption code.", headline, body };
   }
   await db.draft.update({ where: { id: draft.id }, data: { headline, body } });
@@ -77,14 +75,15 @@ export async function rewriteDraft(_prev: CopyState, formData: FormData): Promis
     return { error: `You've used all ${REWRITE_LIMIT} AI rewrites for this draft. You can still edit it yourself.`, ...current, rewritesLeft: 0 };
   }
 
-  // Rebuild the same facts the draft was written from, so a rewrite can't add new claims.
-  const reports = await db.reportUpload.findMany({ where: { restaurantId: restaurant.id, status: { not: "FLAGGED" } } });
-  const offer = buildOffers(computeInsights(reports.map((r) => r.data as unknown as ParsedReport)), restaurant).find(
-    (o) => o.key === draft.offerKey,
-  );
-  if (!offer) return { error: "This offer no longer fits your reports or rules, so it can't be rewritten.", ...current };
+  // Rewrite within the facts the draft was written from, so it can't add new claims.
+  const packet = {
+    restaurant: { name: restaurant.name, brand: restaurant.brand, kind: restaurant.kind },
+    offer: { key: draft.offerKey, title: draft.title, schedule: draft.schedule, audience: draft.audience, copyLabel: draft.copyLabel },
+    facts: draft.facts.length ? draft.facts : [draft.title, draft.schedule],
+    rules: { brandSafe: isBrandSafe(restaurant), maxDiscountPct: restaurant.maxDiscountPct, codePlaceholder: draft.needsCode ? ("[CODE]" as const) : null },
+  };
 
-  const result = await rewriteOfferCopy(providerFromEnv(), packetFor(restaurant, offer), current, instruction);
+  const result = await rewriteOfferCopy(providerFromEnv(), packet, current, instruction);
   await logCall(restaurant.id, result.log);
   if (!result.ok) return { error: result.message, ...current };
 

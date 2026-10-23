@@ -43,8 +43,17 @@ function templateCopy(packet: FactsPacket): OfferCopy {
         headline: "This weekend: free chips with any 6-inch sub",
         body: `Saturday to Monday at ${name}, get free chips with any 6-inch sub. Show code [CODE] at the counter. Valid for the next 2 weeks.`,
       };
-    default:
-      return { headline: packet.offer.title, body: `${packet.facts.join(". ")}.` };
+    default: {
+      // AI-suggested offers: first fact is the title; the rest are when, how long and conditions.
+      const [title, when, ...rest] = packet.facts.filter((f) => f !== "Show the code at the counter");
+      const valid = rest.find((f) => f.startsWith("Valid for"));
+      const code = packet.rules.codePlaceholder ? ` Show code ${packet.rules.codePlaceholder} at the counter.` : "";
+      const offer = (title ?? packet.offer.title).replace(/,[^,]*$/, ""); // drop the time, it's in `when`
+      return {
+        headline: packet.offer.title,
+        body: `${offer} at ${name}${when ? `, ${when}` : ""}.${code}${valid ? ` ${valid.replace("Valid for", "Valid for the next")}.` : ""}`,
+      };
+    }
   }
 }
 

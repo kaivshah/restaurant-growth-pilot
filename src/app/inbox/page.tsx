@@ -13,7 +13,24 @@ import { AppShell } from "./shell";
 
 const SKIP_REASONS = ["Not right for my store", "Too generous", "Wrong timing", "Brand wouldn't allow it"];
 
-type Evidence = { kind: "hourly"; bars: { label: string; hour24: number; sales: number }[]; highlight: number[]; caption: string } | null;
+type Evidence =
+  | { kind: "hourly"; bars: { label: string; hour24: number; sales: number }[]; highlight: number[]; caption: string }
+  | { kind: "citations"; items: { label: string; value: number; source: string }[] }
+  | null;
+
+type Finding = { title: string; detail: string; citations: { label: string; value: number; source: string }[] };
+
+const fmtValue = (v: number) => (Number.isInteger(v) ? v.toLocaleString("en-US") : v.toLocaleString("en-US", { maximumFractionDigits: 2 }));
+
+function SourcePill({ source, confidence }: { source: string; confidence: string | null }) {
+  return source === "AI_ANALYST" ? (
+    <span className="rounded-full bg-primary-soft px-2.5 py-0.5 text-xs font-extrabold text-primary-ink">
+      AI idea{confidence ? ` · ${confidence} confidence` : ""}
+    </span>
+  ) : (
+    <span className="rounded-full bg-sand px-2.5 py-0.5 text-xs font-bold text-ink-2">Standard idea</span>
+  );
+}
 
 function greeting(now = new Date()) {
   const h = Number(now.toLocaleString("en-US", { hour: "numeric", hour12: false, timeZone: "America/Los_Angeles" }));
@@ -41,13 +58,15 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   await requeueStaleJobs();
   after(() => processDraftJobs());
 
-  const [drafts, job] = await Promise.all([
+  const [drafts, job, lastRun] = await Promise.all([
     db.draft.findMany({
       where: { restaurantId: restaurant.id, kind: "CUSTOMER_OFFER" },
       orderBy: [{ createdAt: "asc" }],
     }),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id }, orderBy: { createdAt: "desc" } }),
+    db.analysisRun.findFirst({ where: { restaurantId: restaurant.id, status: { not: "RUNNING" } }, orderBy: { createdAt: "desc" } }),
   ]);
+  const findings = (lastRun?.status === "DONE" ? (lastRun.findings as unknown as Finding[]) : null) ?? [];
   const pending = drafts.filter((x) => x.status === "PENDING").length;
   const working = job?.status === "QUEUED" || job?.status === "RUNNING";
   const selected = drafts.find((x) => x.id === d) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
@@ -117,6 +136,31 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               {job.message} Try &ldquo;Refresh ideas&rdquo;, and if it keeps failing, check the server log.
             </Notice>
           )}
+          {lastRun && (
+            <section aria-label="AI found this week" className="flex flex-col gap-3 rounded-card border border-line bg-surface px-6 py-5">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-lg font-bold">AI found this week</h2>
+                <Link href={`/inbox/analysis/${lastRun.id}`} className="text-sm font-bold">
+                  See how the AI decided
+                </Link>
+              </div>
+              {lastRun.status === "FAILED" ? (
+                <p className="text-ink-2">The AI analysis didn&apos;t finish ({lastRun.error}), so you&apos;re seeing the standard ideas.</p>
+              ) : findings.length === 0 ? (
+                <p className="text-ink-2">Nothing stood out beyond the offers below.</p>
+              ) : (
+                <ul className="grid gap-3 md:grid-cols-2">
+                  {findings.map((f) => (
+                    <li key={f.title} className="flex flex-col gap-1 rounded-2xl bg-ground p-4">
+                      <p className="font-bold">{f.title}</p>
+                      <p className="text-[15px] text-ink-2">{f.detail}</p>
+                      <p className="text-[13px] text-muted">Source: {[...new Set(f.citations.map((c) => c.source))].join("; ")}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
           {drafts.length === 0 ? (
             <Card className="flex flex-col items-start gap-3 p-8">
               <h2 className="text-xl font-bold">{working ? "Preparing your offer ideas…" : "No offer ideas yet"}</h2>
@@ -145,7 +189,10 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                       className={`rounded-card bg-surface px-5 py-4 ${active ? "border-2 border-primary shadow-[0_10px_28px_-16px_rgb(46_125_79/0.55)]" : "border border-line"} ${x.status === "SKIPPED" ? "opacity-70" : ""}`}
                     >
                       <Link href={`/inbox?tab=offers&d=${x.id}`} className="flex flex-col gap-1 text-ink no-underline" aria-current={active ? "true" : undefined}>
-                        <span className="self-start rounded-full bg-sun-soft px-2.5 py-0.5 text-xs font-extrabold text-sun-ink">{x.category}</span>
+                        <span className="flex flex-wrap gap-1.5">
+                          <span className="rounded-full bg-sun-soft px-2.5 py-0.5 text-xs font-extrabold text-sun-ink">{x.category}</span>
+                          <SourcePill source={x.source} confidence={x.confidence} />
+                        </span>
                         <span className="text-[17px] font-bold">{x.title}</span>
                         <span className="text-sm text-muted">{x.schedule}</span>
                       </Link>
@@ -189,7 +236,10 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                 <section aria-label="Selected offer" className="overflow-hidden rounded-card bg-surface shadow-card">
                   <div className="flex flex-col gap-4 border-b border-sand px-6 py-6 sm:px-7">
                     <div className="flex flex-col gap-1">
-                      <span className="self-start rounded-full bg-sun-soft px-2.5 py-0.5 text-xs font-extrabold text-sun-ink">{selected.category}</span>
+                      <span className="flex flex-wrap gap-1.5">
+                        <span className="rounded-full bg-sun-soft px-2.5 py-0.5 text-xs font-extrabold text-sun-ink">{selected.category}</span>
+                        <SourcePill source={selected.source} confidence={selected.confidence} />
+                      </span>
                       <h2 className="text-2xl leading-snug font-extrabold tracking-tight">{selected.title}</h2>
                       <p className="text-[15px] text-muted">{selected.schedule}</p>
                     </div>
@@ -198,10 +248,26 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                       <p className="text-[15px]">{selected.why}</p>
                       {(selected.evidence as Evidence)?.kind === "hourly" && (
                         <HourlyChart
-                          bars={(selected.evidence as NonNullable<Evidence>).bars}
-                          highlight={(selected.evidence as NonNullable<Evidence>).highlight}
-                          caption={(selected.evidence as NonNullable<Evidence>).caption}
+                          bars={(selected.evidence as Extract<Evidence, { kind: "hourly" }>).bars}
+                          highlight={(selected.evidence as Extract<Evidence, { kind: "hourly" }>).highlight}
+                          caption={(selected.evidence as Extract<Evidence, { kind: "hourly" }>).caption}
                         />
+                      )}
+                      {(selected.evidence as Evidence)?.kind === "citations" && (
+                        <div className="flex flex-col gap-2">
+                          <p className="text-[13px] font-bold text-muted">Numbers the AI used, checked against your reports</p>
+                          <ul className="flex flex-col gap-1.5">
+                            {(selected.evidence as Extract<Evidence, { kind: "citations" }>).items.map((c, i) => (
+                              <li key={i} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-t border-sand pt-1.5 text-sm">
+                                <span>
+                                  {c.label}
+                                  <span className="block text-[12px] text-muted">{c.source}</span>
+                                </span>
+                                <span className="font-bold tabular-nums">{fmtValue(c.value)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       )}
                     </div>
                     <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(200px,100%),1fr))] gap-3">

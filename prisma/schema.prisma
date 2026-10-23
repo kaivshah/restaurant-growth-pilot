@@ -70,31 +70,32 @@ enum PromoApproval {
 }
 
 model Restaurant {
-  id                    String         @id @default(cuid())
-  ownerId               String
-  owner                 User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  name                  String
-  kind                  RestaurantKind @default(FRANCHISE)
-  brand                 String?
-  radiusMiles           Int            @default(3)
-  minCateringOrder      Int            @default(10)
-  openingHours          String?
+  id                   String         @id @default(cuid())
+  ownerId              String
+  owner                User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name                 String
+  kind                 RestaurantKind @default(FRANCHISE)
+  brand                String?
+  radiusMiles          Int            @default(3)
+  minCateringOrder     Int            @default(10)
+  openingHours         String?
   // Brand rules (setup step 4)
-  promoApproval         PromoApproval  @default(UNSURE)
-  maxDiscountPct        Int            @default(15)
-  allowFreeExtra        Boolean        @default(true)
-  allowFreeDelivery     Boolean        @default(true)
-  allowPercentOff       Boolean        @default(true)
-  allowBogo             Boolean        @default(false)
-  useBrandCateringMenu  Boolean        @default(true)
-  setupCompletedAt      DateTime?
-  outlets               Outlet[]
-  reports               ReportUpload[]
-  drafts                Draft[]
-  draftJobs             DraftJob[]
-  llmCalls              LlmCall[]
-  createdAt             DateTime       @default(now())
-  updatedAt             DateTime       @updatedAt
+  promoApproval        PromoApproval  @default(UNSURE)
+  maxDiscountPct       Int            @default(15)
+  allowFreeExtra       Boolean        @default(true)
+  allowFreeDelivery    Boolean        @default(true)
+  allowPercentOff      Boolean        @default(true)
+  allowBogo            Boolean        @default(false)
+  useBrandCateringMenu Boolean        @default(true)
+  setupCompletedAt     DateTime?
+  outlets              Outlet[]
+  reports              ReportUpload[]
+  drafts               Draft[]
+  draftJobs            DraftJob[]
+  analysisRuns         AnalysisRun[]
+  llmCalls             LlmCall[]
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
   @@index([ownerId])
 }
@@ -110,9 +111,9 @@ model Outlet {
 }
 
 enum ReportStatus {
-  READ       // parsed, waiting for the owner to confirm
-  CONFIRMED  // owner said the numbers look right
-  FLAGGED    // owner said something looks wrong
+  READ // parsed, waiting for the owner to confirm
+  CONFIRMED // owner said the numbers look right
+  FLAGGED // owner said something looks wrong
 }
 
 model ReportUpload {
@@ -139,8 +140,13 @@ enum DraftKind {
   CATERING_PITCH
 }
 
+enum DraftSource {
+  RULES
+  AI_ANALYST
+}
+
 enum DraftStatus {
-  PENDING   // waiting in the Approval Inbox
+  PENDING // waiting in the Approval Inbox
   APPROVED
   SKIPPED
 }
@@ -148,36 +154,44 @@ enum DraftStatus {
 /// One suggestion in the Approval Inbox. Numbers come from the owner's
 /// confirmed reports; only headline and body are written by the LLM.
 model Draft {
-  id           String      @id @default(cuid())
-  restaurantId String
-  restaurant   Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  kind         DraftKind   @default(CUSTOMER_OFFER)
-  /// Which offer rule produced it, e.g. "welcome", "afternoon-drink"
-  offerKey     String
-  category     String
-  title        String
-  schedule     String
-  why          String
-  audience     String
-  cost         String
-  measure      String
+  id            String       @id @default(cuid())
+  restaurantId  String
+  restaurant    Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  kind          DraftKind    @default(CUSTOMER_OFFER)
+  /// Which idea produced it: a rule ("welcome", "afternoon-drink"…) or an AI idea ("ai-…")
+  offerKey      String
+  source        DraftSource  @default(RULES)
+  /// The AI analyst's confidence: "low" | "medium" | "high"; null for rule ideas
+  confidence    String?
+  analysisRunId String?
+  analysisRun   AnalysisRun? @relation(fields: [analysisRunId], references: [id], onDelete: SetNull)
+  category      String
+  title         String
+  schedule      String
+  why           String
+  audience      String
+  cost          String
+  measure       String
   /// Rule checks shown as ticks, e.g. ["Free extra, no price cut"]
-  checks       String[]
+  checks        String[]
   /// Supporting data for the detail panel (e.g. hourly sales bars)
-  evidence     Json?
-  copyLabel    String
-  headline     String
-  body         String
+  evidence      Json?
+  copyLabel     String
+  /// Facts the copywriter may use, so rewrites stay within them
+  facts         String[]
+  needsCode     Boolean      @default(false)
+  headline      String
+  body          String
   /// Who wrote headline/body: "template", "ollama:<model>", "anthropic:<model>"
-  writtenBy    String
+  writtenBy     String
   /// Hash of the facts sent to the writer; the same facts are never drafted twice
-  factsHash    String
-  rewriteCount Int         @default(0)
-  status       DraftStatus @default(PENDING)
-  skipReason   String?
-  decidedAt    DateTime?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  factsHash     String
+  rewriteCount  Int          @default(0)
+  status        DraftStatus  @default(PENDING)
+  skipReason    String?
+  decidedAt     DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
   @@unique([restaurantId, factsHash])
   @@index([restaurantId, status])
@@ -221,6 +235,45 @@ model LlmCall {
   durationMs   Int
   error        String?
   createdAt    DateTime    @default(now())
+
+  @@index([restaurantId, createdAt])
+}
+
+enum AnalysisStatus {
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// One run of the AI analyst over a restaurant's data: what it looked at,
+/// what it found, and which proposals passed or failed the code checks.
+model AnalysisRun {
+  id                String         @id @default(cuid())
+  restaurantId      String
+  restaurant        Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  provider          String
+  model             String
+  status            AnalysisStatus @default(RUNNING)
+  /// Hash of the reports, rules and past decisions; unchanged data reuses the last run
+  dataHash          String
+  /// Verified findings shown as "AI found this week"
+  findings          Json?
+  /// Proposals that passed every check
+  accepted          Json?
+  /// Proposals or findings that failed a check, with the reasons
+  rejected          Json?
+  /// What the AI decided about each standard idea (keep / change / drop)
+  baselineDecisions Json?
+  /// Every tool call: name, input, output
+  toolLog           Json?
+  toolCalls         Int            @default(0)
+  inputTokens       Int            @default(0)
+  outputTokens      Int            @default(0)
+  estimatedCostUsd  Float?
+  error             String?
+  drafts            Draft[]
+  createdAt         DateTime       @default(now())
+  finishedAt        DateTime?
 
   @@index([restaurantId, createdAt])
 }

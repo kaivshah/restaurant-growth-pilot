@@ -12,8 +12,21 @@ export interface OfferRules {
   allowPercentOff: boolean;
 }
 
+export interface Citation {
+  label: string;
+  value: number;
+  source: string;
+}
+
+export type OfferEvidence =
+  | { kind: "hourly"; bars: HourBar[]; highlight: number[]; caption: string }
+  | { kind: "citations"; items: Citation[] };
+
 export interface OfferCandidate {
-  key: "welcome" | "afternoon-drink" | "weekend-bread";
+  /** Rule ideas: "welcome", "afternoon-drink", "weekend-bread"; AI ideas: "ai-<slug>" */
+  key: string;
+  source: "RULES" | "AI_ANALYST";
+  confidence: "low" | "medium" | "high" | null;
   category: string;
   title: string;
   schedule: string;
@@ -27,7 +40,7 @@ export interface OfferCandidate {
   facts: string[];
   /** Whether the message must include the [CODE] placeholder */
   needsCode: boolean;
-  evidence: { kind: "hourly"; bars: HourBar[]; highlight: number[]; caption: string } | null;
+  evidence: OfferEvidence | null;
 }
 
 const money = (n: number, cents = false) =>
@@ -47,6 +60,8 @@ function welcome(ins: Insights): OfferCandidate {
   const visitors = ins.customers;
   return {
     key: "welcome",
+    source: "RULES",
+    confidence: null,
     category: "Build your list",
     title: "Free cookie when you join our email list",
     schedule: "Always on · QR code at the counter and on receipts",
@@ -82,6 +97,8 @@ function afternoonDrink(ins: Insights, rules: OfferRules): OfferCandidate | null
   const shareUsed = free ? freeShare! : dollarDrinkShare!;
   return {
     key: "afternoon-drink",
+    source: "RULES",
+    confidence: null,
     category: "Slow hours",
     title: `${deal}, 3–5 pm`,
     schedule: "Mon–Fri, 3–5 pm · for 4 weeks",
@@ -118,6 +135,8 @@ function weekendBread(ins: Insights, rules: OfferRules): OfferCandidate | null {
     .join(", ");
   return {
     key: "weekend-bread",
+    source: "RULES",
+    confidence: null,
     category: "Use extra stock",
     title: "Free chips with any 6-inch sub, Sat–Mon",
     schedule: "Sat–Mon · for 2 weeks",
