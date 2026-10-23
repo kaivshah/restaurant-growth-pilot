@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Auth.js tables ----------
+
+model User {
+  id            String       @id @default(cuid())
+  name          String?
+  email         String?      @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  restaurants   Restaurant[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------- Product ----------
+
+enum RestaurantKind {
+  FRANCHISE
+  INDEPENDENT
+}
+
+enum PromoApproval {
+  YES
+  NO
+  UNSURE
+}
+
+model Restaurant {
+  id                    String         @id @default(cuid())
+  ownerId               String
+  owner                 User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name                  String
+  kind                  RestaurantKind @default(FRANCHISE)
+  brand                 String?
+  radiusMiles           Int            @default(3)
+  minCateringOrder      Int            @default(10)
+  openingHours          String?
+  // Brand rules (setup step 4)
+  promoApproval         PromoApproval  @default(UNSURE)
+  maxDiscountPct        Int            @default(15)
+  allowFreeExtra        Boolean        @default(true)
+  allowFreeDelivery     Boolean        @default(true)
+  allowPercentOff       Boolean        @default(true)
+  allowBogo             Boolean        @default(false)
+  useBrandCateringMenu  Boolean        @default(true)
+  setupCompletedAt      DateTime?
+  outlets               Outlet[]
+  reports               ReportUpload[]
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  @@index([ownerId])
+}
+
+model Outlet {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  address      String
+  latitude     Float?
+  longitude    Float?
+  createdAt    DateTime   @default(now())
+}
+
+enum ReportStatus {
+  READ       // parsed, waiting for the owner to confirm
+  CONFIRMED  // owner said the numbers look right
+  FLAGGED    // owner said something looks wrong
+}
+
+model ReportUpload {
+  id           String       @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  fileName     String
+  reportType   String
+  storeNumber  String?
+  periodStart  DateTime?    @db.Date
+  periodEnd    DateTime?    @db.Date
+  status       ReportStatus @default(READ)
+  /// The parsed report (see src/lib/reports/types.ts). The original file is not kept.
+  data         Json
+  createdAt    DateTime     @default(now())
+
+  @@index([restaurantId, reportType, periodEnd])
+}

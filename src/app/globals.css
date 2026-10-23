@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* "Warm & friendly" design system — matches the approved screen designs. */
+@theme {
+  --color-ground: #faf7f0;
+  --color-surface: #ffffff;
+  --color-sand: #f1ede3;
+  --color-line: #ece6d8;
+  --color-field: #d8d2c4;
+  --color-ink: #1f2a24;
+  --color-ink-2: #3f4842;
+  --color-muted: #5a645d;
+  --color-primary: #2e7d4f;
+  --color-primary-hover: #23633e;
+  --color-primary-ink: #1d4f33;
+  --color-primary-soft: #e4f1e8;
+  --color-sun: #f4c04e;
+  --color-sun-soft: #fdf3d6;
+  --color-sun-ink: #4a3810;
+  --color-danger: #a33a3a;
+  --color-danger-soft: #f8eeee;
+
+  --font-sans: var(--font-jakarta), "Segoe UI", system-ui, sans-serif;
+
+  --radius-card: 20px;
+  --radius-field: 12px;
+
+  --shadow-card: 0 1px 2px rgb(60 50 20 / 0.06), 0 8px 24px -12px rgb(60 50 20 / 0.18);
+}
+
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-sun);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

@@ -1,0 +1,19 @@
+"Store:","00000",
+"Week ending:","3/10/2026"
+
+"'SALES SUMMARY","$","%"
+"'+ UNIT SALES","5000","80"
+"'+ CATERING SALES","250","4"
+"'+ DRINK SALES","600","10"
+"'+ MISC SALES","400","6"
+"'= NET SUBWAY SALES","6250","100"
+"'RENT","1000","16"
+"'= OPERATING EXPENSES","1500","24"
+"'+ LABOR & TAXES","1900","30"
+"'+ COST OF GOODS","1400","22"
+"'+ ROYALTY","500.00","8"
+"'+ FAF","281.25","5"
+"'+ LOCAL ADVERTISING","50","1"
+"'= TOTAL EXPENSES","5631","90"
+"'= BALANCE","619","10"
+"-OTHER EXPENSES", , ,
