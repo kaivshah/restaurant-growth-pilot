@@ -95,7 +95,9 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
   const run = await db.analysisRun.create({ data: { restaurantId: restaurant.id, provider: analyst.provider, model: analyst.model, dataHash } });
   const started = Date.now();
   // Ideas the owner already decided on shouldn't come back under a new name.
-  const outcome = await runAnalysis(analyst, ctx, baseline, decisions.map((d) => d.title));
+  const outcome = await runAnalysis(analyst, ctx, baseline, decisions.map((d) => d.title), {
+    onTurn: (turn, lookups) => progress(restaurant.id, "OFFERS", `AI is studying your reports (step ${turn}, ${lookups} data lookups so far)…`),
+  });
   if (outcome.fatal) {
     await db.analysisRun.update({ where: { id: run.id }, data: { status: "FAILED", error: outcome.error ?? null, model: analyst.model, finishedAt: new Date() } });
     await logAnalysisCall(restaurant.id, analyst, outcome, started, "analysis");
@@ -191,7 +193,7 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
   let reused = 0;
   const failed: string[] = [];
 
-  for (const offer of offers) {
+  for (const [i, offer] of offers.entries()) {
     const packet = packetFor(restaurant, offer);
     const factsHash = hashPacket(packet, offer);
     if (await db.draft.findUnique({ where: { restaurantId_factsHash: { restaurantId, factsHash } } })) {
@@ -202,6 +204,7 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
       return `Created ${created}; stopped at the daily limit of ${DAILY_DRAFT_CAP} drafts. ${note}.`;
     }
 
+    await progress(restaurantId, "OFFERS", `Writing offer ${i + 1} of ${offers.length}: ${offer.title}`);
     const copy = await writeOfferCopy(provider, packet);
     await logCall(restaurantId, copy.log);
     if (!copy.ok) {
@@ -259,24 +262,38 @@ export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFF
   return db.draftJob.create({ data: { restaurantId, kind, force } });
 }
 
-let draining = false;
+/**
+ * Shows what a running job is doing: saved as the job's message (the inbox
+ * and leads pages show it) and printed in the server terminal.
+ */
+export async function progress(restaurantId: string, kind: JobKind, text: string) {
+  console.log(`[${kind === "LEADS" ? "scan" : "offers"}] ${text}`);
+  await db.draftJob.updateMany({ where: { restaurantId, kind, status: "RUNNING" }, data: { message: text } });
+}
+
+const draining = new Set<JobKind>();
 
 /**
- * Processes queued jobs oldest first, one at a time. Safe to call often:
- * a second call while one is draining returns straight away, and each job
- * is claimed atomically so two servers can't run the same one.
+ * Processes queued jobs oldest first. Offer drafting and area scans run side
+ * by side; within each kind, one job at a time. Safe to call often: a second
+ * call while a kind is draining returns straight away, and each job is
+ * claimed atomically so two servers can't run the same one.
  */
 export async function processDraftJobs(maxJobs = 20) {
-  if (draining) return;
-  draining = true;
+  await Promise.all((["OFFERS", "LEADS"] as const).map((kind) => drain(kind, maxJobs)));
+}
+
+async function drain(kind: JobKind, maxJobs: number) {
+  if (draining.has(kind)) return;
+  draining.add(kind);
   try {
     for (let i = 0; i < maxJobs; i++) {
       const next = await db.draftJob.findFirst({
-        where: { status: "QUEUED", OR: [{ runAfter: null }, { runAfter: { lte: new Date() } }] },
+        where: { kind, status: "QUEUED", OR: [{ runAfter: null }, { runAfter: { lte: new Date() } }] },
         orderBy: { createdAt: "asc" },
       });
       if (!next) return;
-      const busy = await db.draftJob.count({ where: { restaurantId: next.restaurantId, status: "RUNNING" } });
+      const busy = await db.draftJob.count({ where: { restaurantId: next.restaurantId, kind, status: "RUNNING" } });
       if (busy > 0) return;
       const claimed = await db.draftJob.updateMany({
         where: { id: next.id, status: "QUEUED" },
@@ -301,7 +318,7 @@ export async function processDraftJobs(maxJobs = 20) {
       }
     }
   } finally {
-    draining = false;
+    draining.delete(kind);
   }
 }
 

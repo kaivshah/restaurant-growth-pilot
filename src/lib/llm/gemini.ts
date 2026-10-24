@@ -92,7 +92,34 @@ export async function geminiGenerate(apiKey: string, model: string, req: GeminiR
   }
 }
 
+/**
+ * Requests are spaced to stay under the free tier's per-minute limit
+ * (GEMINI_RPM, default 10), shared by every job in this server. After a 429
+ * the next request waits for the delay Google asked for.
+ */
+let nextSlot = 0;
+
+export function geminiInterval(env: NodeJS.ProcessEnv = process.env) {
+  const rpm = Number(env.GEMINI_RPM ?? 10);
+  return rpm > 0 ? 60_000 / rpm : 0;
+}
+
+async function waitForSlot(signal: AbortSignal) {
+  const now = Date.now();
+  const at = Math.max(now, nextSlot);
+  nextSlot = at + geminiInterval();
+  if (at <= now) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, at - now);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new Error("aborted"));
+    }, { once: true });
+  });
+}
+
 async function generateWith(apiKey: string, model: string, req: GeminiRequest, signal: AbortSignal): Promise<GeminiResponse> {
+  await waitForSlot(signal);
   const send = (body: GeminiRequest) =>
     fetch(`${base()}/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
@@ -114,7 +141,11 @@ async function generateWith(apiKey: string, model: string, req: GeminiRequest, s
     throw new ProviderError("Can't reach the Gemini API. Check your internet connection.", true);
   }
   const body = safeJson(await res.text());
-  if (!res.ok) throw geminiError(res.status, body);
+  if (!res.ok) {
+    const err = geminiError(res.status, body);
+    if (err instanceof ProviderError && err.retryAfterMs) nextSlot = Math.max(nextSlot, Date.now() + err.retryAfterMs);
+    throw err;
+  }
   const out = body as GeminiResponse;
   if (out.promptFeedback?.blockReason) throw new ProviderError(`Gemini blocked the request (${out.promptFeedback.blockReason})`, false);
   return out;

@@ -16,6 +16,8 @@ Everything is written and decided by a real AI model; there are no pre-written d
 
 Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 
+**Speed:** requests are spaced to stay under the free per-minute limit (`GEMINI_RPM`, default 10), so a first run (offer analysis, offer emails, lead analysis and up to 15 pitches, roughly 30–40 requests) takes a few minutes. Offer drafting and the area scan run side by side, pitches appear in the inbox one by one, and the page and the server terminal show each step (`[scan] Writing pitch 4 of 15…`). On a paid Gemini project or Claude, raise `GEMINI_RPM` or switch providers for faster runs.
+
 **Free limits:** Gemini's free tier allows a limited number of requests per minute and per day (see your quota in AI Studio). A full refresh uses roughly 10–25 requests. When a limit is hit, the job waits and tries again after 2, 5, 10, 20, 30 and 60 minutes (or longer if Google asks), and the inbox shows "The AI is busy… we'll try again at 3:40 pm". Drafts already written are kept, and **Refresh ideas** / **Scan my area** tries again straight away. Retries happen while the app is open in a browser.
 
 **Privacy:** on the free tier, Google may use what's sent to improve its models: the store's sales totals and offer facts, and in pitches the business name and the contact's first name. No customer data is sent. For production, use Claude or a paid Gemini project.

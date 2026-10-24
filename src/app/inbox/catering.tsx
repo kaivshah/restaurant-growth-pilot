@@ -59,7 +59,10 @@ export async function CateringTab({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-line bg-surface px-6 py-4">
         <p className="text-ink-2">
           {working ? (
-            <strong className="text-ink">Scanning the {radiusMiles} mi around your store…</strong>
+            <>
+              <strong className="text-ink">Scanning the {radiusMiles} mi around your store…</strong>
+              {job?.status === "RUNNING" && job.message && <span className="block text-sm">{job.message}</span>}
+            </>
           ) : scan ? (
             <>
               Last scan {when(scan.createdAt)}: <strong className="text-ink">{scan.leadsFound} businesses</strong>, {scan.eventsFound} upcoming events.
@@ -92,7 +95,7 @@ export async function CateringTab({
           <h2 className="text-xl font-bold">{working ? "Finding offices, schools and events near you…" : "No catering pitches yet"}</h2>
           <p className="max-w-[62ch] text-ink-2">
             {working
-              ? "We're searching your area, looking up who orders food at each place, and drafting pitches. This page updates by itself."
+              ? "We're searching your area, looking up who orders food at each place, and drafting pitches. With Gemini's free plan this takes a few minutes, because it allows about 10 AI requests a minute. This page updates by itself."
               : (job?.message ?? `Click "Scan my area" to search the ${radiusMiles} mi around your store for businesses and events that order catering.`)}
           </p>
         </Card>

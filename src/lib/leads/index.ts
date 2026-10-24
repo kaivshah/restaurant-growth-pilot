@@ -5,7 +5,7 @@ import type { EventInfo, LeadContext, LeadInfo, LeadOutcome, Pitch } from "@/lib
 import { MAX_PITCHES } from "@/lib/analyst/leads";
 import { type ContactsProvider, QuotaError, contactsFromEnv } from "@/lib/contacts";
 import { db } from "@/lib/db";
-import { DAILY_DRAFT_CAP, draftsToday, json, logAnalysisCall, logCall, usableReports } from "@/lib/drafts";
+import { DAILY_DRAFT_CAP, draftsToday, json, logAnalysisCall, logCall, progress, usableReports } from "@/lib/drafts";
 import { eventsFromEnv } from "@/lib/events";
 import { type LatLng, domainOf, isUsefulDomain, milesBetween } from "@/lib/geo";
 import { AiBusyError, AiConfigError, type CopyProvider, type FactsPacket, type PitchFacts, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
@@ -72,11 +72,16 @@ export async function scanArea(restaurantId: string, opts: { force?: boolean; no
     if (recent && !opts.force) {
       counts.notes.push("reused the scan from the last 24 hours");
     } else {
+      await progress(restaurantId, "LEADS", "Finding your store on the map…");
       const center = await locate(outlet, places);
       if (!center) throw new Error(`We couldn't find "${outlet.address}" on the map. Check the store address in setup.`);
+      await progress(restaurantId, "LEADS", "Searching for offices, schools, clinics and venues nearby…");
       await findLeads(restaurant, center, places, now, counts);
-      if (contacts) await findContacts(restaurantId, contacts, now, counts);
-      else counts.notes.push("contact lookup is off");
+      if (contacts) {
+        await progress(restaurantId, "LEADS", `Found ${counts.leads} businesses. Looking up who orders food…`);
+        await findContacts(restaurantId, contacts, now, counts);
+      } else counts.notes.push("contact lookup is off");
+      await progress(restaurantId, "LEADS", "Checking for upcoming events…");
       await findEvents(restaurant, center, places, events, now, counts);
     }
     const drafted = await draftPitches(restaurant, now);
@@ -472,7 +477,7 @@ async function draftPitches(restaurant: Restaurant, now: Date): Promise<{ create
   const pitched = new Set<string>();
   const failed: string[] = [];
 
-  for (const { pitch: p, ai } of list) {
+  for (const [i, { pitch: p, ai }] of list.entries()) {
     const lead = leads.find((l) => l.id === p.lead_id);
     if (!lead || lead.status === "EXCLUDED") continue;
     pitched.add(lead.id);
@@ -482,6 +487,7 @@ async function draftPitches(restaurant: Restaurant, now: Date): Promise<{ create
     }
     const event = p.event_id ? (eventRows.find((e) => e.id === p.event_id) ?? null) : null;
     const meta: PitchMeta = ai ? chosen : { source: "RULES", analysisRunId: null, toolLog: [] };
+    await progress(restaurant.id, "LEADS", `Writing pitch ${i + 1} of ${list.length}: ${lead.name}`);
     const res = await draftPitch(restaurant, provider, lead, event, p, meta);
     if (res.kind === "created") created++;
     else if (res.kind === "reused") reused++;
@@ -530,7 +536,9 @@ async function choosePitches(restaurant: Restaurant, ctx: LeadContext): Promise<
 
   const run = await db.analysisRun.create({ data: { restaurantId: restaurant.id, purpose: "leads", provider: analyst.provider, model: analyst.model, dataHash } });
   const started = Date.now();
-  const outcome = await runLeadAnalysis(analyst, ctx);
+  const outcome = await runLeadAnalysis(analyst, ctx, {
+    onTurn: (turn, lookups) => progress(restaurant.id, "LEADS", `AI is choosing who to pitch from ${ctx.leads.length} businesses (step ${turn}, ${lookups} lookups)…`),
+  });
   if (outcome.fatal) {
     await db.analysisRun.update({ where: { id: run.id }, data: { status: "FAILED", error: outcome.error ?? null, model: analyst.model, finishedAt: new Date() } });
     await logAnalysisCall(restaurant.id, analyst, outcome, started, "lead-analysis");

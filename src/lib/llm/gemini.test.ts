@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Pacing is tested on its own; the other tests send requests back to back.
+process.env.GEMINI_RPM = "0";
 import { geminiAnalyst } from "@/lib/analyst/models";
 import { AiBusyError, AiConfigError, writeOfferCopy } from "@/lib/llm";
 import { jobState, retryLater } from "@/lib/drafts";
-import { geminiError, replacementFor, simplifySchema } from "./gemini";
+import { geminiError, geminiInterval, replacementFor, simplifySchema } from "./gemini";
 import { geminiProvider } from "./providers";
 import { ProviderError } from "./types";
 
@@ -149,5 +152,13 @@ describe("retired Gemini models", () => {
     const out = await writeOfferCopy(geminiProvider("bad", "gemini-3.8-flash"), packet, { sleep: async () => {}, timeoutMs: 1000 });
     expect(out).toMatchObject({ ok: false, fatal: true, retryable: false });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pacing for the free tier", () => {
+  it("spaces requests to stay under the per-minute limit", () => {
+    expect(geminiInterval({ GEMINI_RPM: "10" } as unknown as NodeJS.ProcessEnv)).toBe(6000);
+    expect(geminiInterval({} as unknown as NodeJS.ProcessEnv)).toBe(6000);
+    expect(geminiInterval({ GEMINI_RPM: "0" } as unknown as NodeJS.ProcessEnv)).toBe(0);
   });
 });

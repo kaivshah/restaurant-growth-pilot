@@ -148,7 +148,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
               <h2 className="text-xl font-bold">{working ? "Preparing your offer ideas…" : "No offer ideas yet"}</h2>
               <p className="max-w-[62ch] text-ink-2">
                 {working
-                  ? "We're reading your confirmed reports. This page updates by itself."
+                  ? `${job?.status === "RUNNING" && job.message ? `${job.message} ` : "Waiting to start. "}With Gemini's free plan this can take a few minutes. This page updates by itself.`
                   : job?.message === "Waiting for confirmed reports."
                     ? "Confirm the numbers from your weekly reports first, then we'll suggest offers."
                     : "Your reports don't point to any offers your rules allow right now. Try adding more weeks of reports, or allow more offer types in Settings."}

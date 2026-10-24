@@ -13,6 +13,8 @@ export interface RunLimits {
   /** Stop when the run has read this many input tokens in total */
   maxInputTokens?: number;
   retry?: RetryOptions;
+  /** Called before each model turn, e.g. to show progress */
+  onTurn?: (turn: number, toolCalls: number) => void | Promise<void>;
 }
 
 export interface LoopResult<S> {
@@ -69,6 +71,7 @@ export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, 
 
   while (out.turns < maxTurns) {
     out.turns++;
+    await limits.onTurn?.(out.turns, out.toolCalls);
     let turn;
     try {
       const current = input;
