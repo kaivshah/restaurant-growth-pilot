@@ -1,13 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { QuotaError, contactsFromEnv } from "@/lib/contacts";
 import { db } from "@/lib/db";
 import { domainOf, isUsefulDomain } from "@/lib/geo";
-import { contactLabel, draftPitch, lookupContacts } from "@/lib/leads";
+import { enqueueDraftJob, processDraftJobs } from "@/lib/drafts";
+import { contactLabel, generatePitch, lookupContacts } from "@/lib/leads";
 import { LEAD_SKIP_REASONS } from "@/lib/leads/score";
-import { AiBusyError, missingAiReason, providerFromEnv } from "@/lib/llm";
 import { requireRestaurant } from "@/lib/restaurant";
 
 async function ownLead(id: string) {
@@ -92,33 +93,22 @@ export async function findContact(_prev: LeadActionState, formData: FormData): P
   }
 }
 
-/** Write a pitch for any business on the list, right now. */
-export async function pitchLead(_prev: LeadActionState, formData: FormData): Promise<LeadActionState> {
+/** "Generate pitch" on a business or an event: contact lookup if needed, then one AI-written email. */
+export async function generatePitchAction(_prev: LeadActionState, formData: FormData): Promise<LeadActionState> {
   const restaurant = await requireRestaurant();
-  const lead = await db.lead.findFirst({ where: { id: String(formData.get("id") ?? ""), restaurantId: restaurant.id }, include: { contacts: { orderBy: { createdAt: "asc" } } } });
-  if (!lead) return { error: "This business is no longer in your scan." };
-  if (lead.status === "EXCLUDED") return { error: "Include this business again first." };
-  const pending = await db.draft.findFirst({ where: { leadId: lead.id, status: { in: ["PENDING", "APPROVED"] } } });
-  if (pending) return { ok: "This business already has a pitch.", href: `/inbox?tab=catering&d=${pending.id}` };
-  const provider = providerFromEnv();
-  if (!provider) return { error: `AI isn't set up. ${missingAiReason()}` };
-  const offer = restaurant.allowFreeExtra ? "free_cookie_platter" : restaurant.allowFreeDelivery ? "free_delivery" : null;
-  if (!offer) return { error: "Your rules don't allow a free extra or free delivery, so there's no offer to make. Change this in Settings." };
-  try {
-    const res = await draftPitch(
-      restaurant,
-      provider,
-      lead,
-      null,
-      { lead_id: lead.id, contact_id: lead.contacts[0]?.id, offer, occasion: "Team lunches", why: lead.scoreReasons.join(". "), confidence: "medium", evidence: [] },
-      { source: "RULES", analysisRunId: null, toolLog: [] },
-    );
-    done();
-    if (res.kind === "failed") return { error: `The AI couldn't write a pitch that passes the checks: ${res.message}` };
-    if (res.kind === "decided") return { error: "You already decided on a pitch to this business." };
-    return { ok: "Pitch written.", href: `/inbox?tab=catering&d=${res.draftId}` };
-  } catch (err) {
-    if (err instanceof AiBusyError) return { error: `The AI is busy (${err.message}). Try again in a few minutes.` };
-    throw err;
-  }
+  const leadId = String(formData.get("leadId") ?? "") || undefined;
+  const eventId = String(formData.get("eventId") ?? "") || undefined;
+  if (!leadId && !eventId) return { error: "Nothing to pitch." };
+  const res = await generatePitch(restaurant, { leadId, eventId });
+  done();
+  if (!res.ok) return { error: res.error };
+  return { ok: res.note ? `Pitch ready. ${res.note}` : "Pitch ready.", href: `/inbox?tab=catering&d=${res.draftId}` };
+}
+
+/** "AI suggests": the analyst marks the most promising businesses and events, in the background. */
+export async function suggestAction() {
+  const restaurant = await requireRestaurant();
+  await enqueueDraftJob(restaurant.id, "SUGGEST");
+  after(() => processDraftJobs());
+  done();
 }

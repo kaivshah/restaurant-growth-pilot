@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { REWRITE_LIMIT, jobState } from "@/lib/drafts";
 import { LEAD_SKIP_REASONS } from "@/lib/leads/score";
 import { LIMITS } from "@/lib/llm/validate";
-import { approveDraft, scanMyArea, setSkipReason, skipDraft, undoDraft } from "./actions";
+import { approveDraft, setSkipReason, skipDraft, undoDraft } from "./actions";
 import { ActionButton } from "../leads/action-button";
 import { findContact } from "../leads/actions";
 import { ContactForm } from "./contact-form";
@@ -51,8 +51,6 @@ export async function CateringTab({
   const working = jobState(job) === "working";
   const selected = drafts.find((x) => x.id === selectedId) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
   const ev = selected?.evidence as PitchEvidence | null;
-  // e.g. "AI picked 6 of 88 businesses (…), 9 more added as top matches", from the scan summary
-  const picked = scan?.message?.match(/AI picked [^;]*?(?=, stopped|, couldn't|;|$)|chose the top-scored leads[^;,]*/)?.[0]?.replace(/^chose/, "Chose");
 
   return (
     <>
@@ -65,44 +63,35 @@ export async function CateringTab({
             </>
           ) : scan ? (
             <>
-              Last scan {when(scan.createdAt)}: <strong className="text-ink">{scan.leadsFound} businesses</strong>, {scan.eventsFound} upcoming events.
-              {picked && <span className="block text-sm">{picked}. Pitch any other business from Leads &amp; events.</span>}
+              <strong className="text-ink">{scan.leadsFound} businesses</strong> and {scan.eventsFound} upcoming events found {when(scan.createdAt)}. Choose which to pitch on Leads &amp; events.
             </>
           ) : (
             "We haven't scanned your area yet."
           )}
         </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link href="/leads" className="font-bold">
-            See all leads & events
-          </Link>
-          <form action={scanMyArea}>
-            <button type="submit" disabled={working} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60">
-              {working ? "Scanning…" : "Scan my area"}
-            </button>
-          </form>
-        </div>
+        <Link href="/leads" className="flex min-h-11 items-center rounded-field bg-primary px-5 font-bold text-white no-underline hover:bg-primary-hover">
+          Find businesses &amp; events to pitch
+        </Link>
       </div>
 
       {job?.status === "FAILED" && (
         <Notice tone="danger" title="The area scan didn't finish.">
-          {job.message} Try &ldquo;Scan my area&rdquo; again, and if it keeps failing, check the server log.
+          {job.message} Try &ldquo;Scan my area&rdquo; on Leads &amp; events again, and if it keeps failing, check the server log.
         </Notice>
       )}
 
       {drafts.length === 0 ? (
         <Card className="flex flex-col items-start gap-3 p-8">
-          <h2 className="text-xl font-bold">{working ? "Finding offices, schools and events near you…" : "No catering pitches yet"}</h2>
+          <h2 className="text-xl font-bold">No catering pitches yet</h2>
           <p className="max-w-[62ch] text-ink-2">
-            {working
-              ? "We're searching your area, looking up who orders food at each place, and drafting pitches. With Gemini's free plan this takes a few minutes, because it allows about 10 AI requests a minute. This page updates by itself."
-              : (job?.message ?? `Click "Scan my area" to search the ${radiusMiles} mi around your store for businesses and events that order catering.`)}
+            Open <Link href="/leads">Leads &amp; events</Link>, filter the businesses and events near you, and click <strong>Generate pitch</strong> on the ones you want. Each pitch appears
+            here for you to edit and approve.
           </p>
         </Card>
       ) : (
         <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
           <section aria-label="Catering pitches" className="flex flex-col gap-3">
-            <p className="text-sm font-semibold text-muted">Best matches first. Nothing is sent until you approve it.</p>
+            <p className="text-sm font-semibold text-muted">Pitches you generated. Nothing is sent until you approve it.</p>
             {drafts.map((x) => {
               const active = x.id === selected?.id;
               const e = x.evidence as PitchEvidence | null;

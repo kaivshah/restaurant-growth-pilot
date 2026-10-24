@@ -267,7 +267,7 @@ export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFF
  * and leads pages show it) and printed in the server terminal.
  */
 export async function progress(restaurantId: string, kind: JobKind, text: string) {
-  console.log(`[${kind === "LEADS" ? "scan" : "offers"}] ${text}`);
+  console.log(`[${kind === "LEADS" ? "scan" : kind === "SUGGEST" ? "suggest" : "offers"}] ${text}`);
   await db.draftJob.updateMany({ where: { restaurantId, kind, status: "RUNNING" }, data: { message: text } });
 }
 
@@ -280,7 +280,7 @@ const draining = new Set<JobKind>();
  * claimed atomically so two servers can't run the same one.
  */
 export async function processDraftJobs(maxJobs = 20) {
-  await Promise.all((["OFFERS", "LEADS"] as const).map((kind) => drain(kind, maxJobs)));
+  await Promise.all((["OFFERS", "LEADS", "SUGGEST"] as const).map((kind) => drain(kind, maxJobs)));
 }
 
 async function drain(kind: JobKind, maxJobs: number) {
@@ -301,10 +301,13 @@ async function drain(kind: JobKind, maxJobs: number) {
       });
       if (claimed.count === 0) continue;
       try {
+        const leads = next.kind === "OFFERS" ? null : await import("@/lib/leads");
         const message =
           next.kind === "LEADS"
-            ? await (await import("@/lib/leads")).scanArea(next.restaurantId, { force: next.force })
-            : await buildDraftsFor(next.restaurantId);
+            ? await leads!.scanArea(next.restaurantId, { force: next.force })
+            : next.kind === "SUGGEST"
+              ? await leads!.suggestLeads(next.restaurantId)
+              : await buildDraftsFor(next.restaurantId);
         await db.draftJob.update({ where: { id: next.id }, data: { status: "DONE", message, finishedAt: new Date(), runAfter: null } });
       } catch (err) {
         if (err instanceof AiBusyError) {

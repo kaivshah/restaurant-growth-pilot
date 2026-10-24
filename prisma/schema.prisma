@@ -210,7 +210,8 @@ model Draft {
 
 enum JobKind {
   OFFERS // customer offer ideas from reports
-  LEADS // scan the area and draft catering pitches
+  LEADS // scan the area for businesses and events (no AI, no pitches)
+  SUGGEST // AI marks the most promising leads and events
 }
 
 enum JobStatus {
@@ -393,7 +394,7 @@ model Event {
   id            String     @id @default(cuid())
   restaurantId  String
   restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  /// "predicthq" | "ticketmaster" | "sandiego-permits" | "fake"
+  /// "predicthq" | "ticketmaster" | "web" (Gemini + Google Search) | "fake"
   source        String
   externalId    String
   title         String
@@ -408,6 +409,8 @@ model Event {
   distanceMiles Float?
   attendance    Int?
   organizer     String?
+  /// One or two sentences about the event, from the source
+  description   String?
   url           String?
   /// The lead for this event's venue, when it could be matched to a nearby place
   venueLeadId   String?

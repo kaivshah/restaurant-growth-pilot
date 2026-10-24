@@ -15,7 +15,7 @@ export type GeminiPart = {
 export type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
 
 export type GeminiResponse = {
-  candidates?: { content?: GeminiContent; finishReason?: string }[];
+  candidates?: { content?: GeminiContent; finishReason?: string; groundingMetadata?: { groundingChunks?: { web?: { uri?: string; title?: string } }[] } }[];
   promptFeedback?: { blockReason?: string };
   usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number };
 };
@@ -69,7 +69,7 @@ export function simplifySchema(schema: unknown): unknown {
 export interface GeminiRequest {
   systemInstruction?: { parts: { text: string }[] };
   contents: GeminiContent[];
-  tools?: { functionDeclarations: { name: string; description: string; parametersJsonSchema: unknown }[] }[];
+  tools?: ({ functionDeclarations: { name: string; description: string; parametersJsonSchema: unknown }[] } | { google_search: Record<string, never> })[];
   generationConfig?: Record<string, unknown>;
 }
 
@@ -181,7 +181,7 @@ async function requestOnce(apiKey: string, model: string, req: GeminiRequest, si
 function simplifyRequest(req: GeminiRequest): GeminiRequest {
   return {
     ...req,
-    tools: req.tools?.map((t) => ({ functionDeclarations: t.functionDeclarations.map((f) => ({ ...f, parametersJsonSchema: simplifySchema(f.parametersJsonSchema) })) })),
+    tools: req.tools?.map((t) => ("functionDeclarations" in t ? { functionDeclarations: t.functionDeclarations.map((f) => ({ ...f, parametersJsonSchema: simplifySchema(f.parametersJsonSchema) })) } : t)),
     generationConfig: req.generationConfig?.responseJsonSchema
       ? { ...req.generationConfig, responseJsonSchema: simplifySchema(req.generationConfig.responseJsonSchema) }
       : req.generationConfig,

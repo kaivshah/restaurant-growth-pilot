@@ -26,33 +26,39 @@ Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 
 **Switching to Claude:** set `LLM_PROVIDER="anthropic"`, `ANALYST_PROVIDER="anthropic"` and `ANTHROPIC_API_KEY`, then restart.
 
-### Milestone 3a: catering leads and pitches (sending comes in 3b)
+### Milestone 3a: catering leads, events and pitches on request (sending comes in 3b)
 
-After setup, and whenever the owner clicks **Scan my area**, a background job:
+**Scan my area** (also run when setup is finished) collects; it writes nothing and uses no AI tokens except one web search:
 
 1. Finds the store on the map (Google Geocoding) and searches the delivery radius for offices, coworking spaces, schools, clinics, gyms and event venues (Google Places API (New) Text Search).
 2. Scores each place (type, distance, whether it has a real website, review count) and explains the score in plain words. Closed places and places outside the radius are left out.
-3. Looks up who orders food at the best places (Hunter.io domain search, office managers and admins first), and verifies the top email.
-4. Finds upcoming events 7–60 days ahead (PredictHQ and/or Ticketmaster), scores them, and matches each venue to a nearby place so the venue can be pitched 2–6 weeks ahead.
-5. Lets the AI lead analyst choose who to pitch and what to offer (free cookie platter, drinks tray or delivery, as the owner's rules allow), with the same checks as the offer analyst: every number it writes must come from the scan. With the analyst off, the top-scored leads and event venues get the default offer.
-6. Drafts a pitch email for each, which must say a franchise is independently owned and operated. A scan puts up to `PITCHES_PER_SCAN` (15) pitches in the inbox: the AI's picks first ("AI pick"), then the best-scored businesses it didn't pick or skip ("Top match"). Pitches without a contact are allowed; **Find contact** spends one Hunter lookup on that business when you ask, or you can type a contact in. Any other business can be pitched from **Leads & events** with **Pitch this business**.
+3. Finds upcoming events 7–60 days ahead: a **web search** (Gemini with Google Search) for conferences, expos, tournaments, community events and corporate events at the offices it found, plus PredictHQ and Ticketmaster when their keys are set. Each event is scored, and its venue or organiser is matched to a business so it can be pitched 2–6 weeks ahead. Web results link to the page they came from; check the details before pitching.
 
-The **Catering** tab in the Approval Inbox shows each pitch with its fit score, reasons, event, contact (editable) and email (editable by hand or with AI). Skipping with a reason like "Wrong kind of business" keeps that business out of future pitches. Approving marks it ready: **nothing is sent yet**. Gmail sending, follow-ups and replies come in milestone 3b. The **Leads & events** page lists every business and event found, with filters, Google Maps links, exclude/include and manual contacts.
+On **Leads & events** the owner browses **Events** and **Businesses** with filters (type, date range, distance, search, pitched or not) and sorting (date, best fit, closest, biggest crowd, AI picks). **Generate pitch** on any row:
+
+- finds who to contact (the business, or an event's venue or organiser, looked up on Google if needed),
+- looks up a contact with Hunter if there isn't one yet (only then, so credits aren't spent on places you never pitch),
+- writes one pitch email with the AI, which must say a franchise is independently owned and operated.
+
+**AI suggests** (optional, needs `ANALYST_PROVIDER`) lets the lead analyst look through the list and mark its top picks with reasons, using the same checks as the offer analyst (every number it writes must come from the scan). Pitches generated for an AI pick use its offer and reasons.
+
+The **Catering** tab in the Approval Inbox holds the generated pitches: fit score, reasons, event, contact (editable) and email (editable by hand or with AI). Skipping with a reason like "Wrong kind of business" excludes that business. Approving marks it ready: **nothing is sent yet**. Gmail sending, follow-ups and replies come in milestone 3b.
+
+**Customer offers** stay automatic: once reports are confirmed, the AI analyst and copywriter prepare offer ideas in the inbox.
 
 **Keys and quotas** (all optional; `fake` providers let you try everything without keys, see `.env.example`):
 
 | Service | Variable | Notes |
 |---|---|---|
-| Google Maps Platform | `GOOGLE_MAPS_API_KEY`, `PLACES_PROVIDER=google` | Enable the Geocoding API and Places API (New). One scan makes about 7 calls. |
-| Hunter.io | `HUNTER_API_KEY`, `CONTACTS_PROVIDER=hunter` | The free plan has 50 credits a month. Each scan uses at most `HUNTER_MAX_LOOKUPS` searches (2 for the trial), each plus one email check, and a domain isn't searched again for 30 days. |
-| PredictHQ | `PREDICTHQ_API_KEY`, `PREDICTHQ_LOCATION_ID` | Best source for conferences and expos with attendance. The free plan searches saved locations only. |
+| Google Maps Platform | `GOOGLE_MAPS_API_KEY`, `PLACES_PROVIDER=google` | Enable the Geocoding API and Places API (New). A scan makes about 7 calls, plus up to 15 to place web-search events. |
+| Gemini web search | `GEMINI_API_KEY` (`WEB_EVENTS="off"` turns it off) | One grounded search per scan. Google gives a separate free allowance for search grounding (reported as 5,000 a month for Gemini 3 models). |
+| Hunter.io | `HUNTER_API_KEY`, `CONTACTS_PROVIDER=hunter` | Free plan: 50 credits a month. Used only when you generate a pitch for a business without a contact (one search plus one email check); a domain isn't searched again for 30 days. |
+| PredictHQ | `PREDICTHQ_API_KEY`, `PREDICTHQ_LOCATION_ID` | Conferences and expos with attendance. The free plan searches saved locations only. |
 | Ticketmaster Discovery | `TICKETMASTER_API_KEY` | Free, 5,000 calls a day. Ticketed games and concerts. |
 
-A bad AI key or model stops the scan at the first draft with one clear message. Businesses from a different source (for example sample data from a `fake` test run) are removed on the next real scan, unless their pitch was approved. Events only appear when `TICKETMASTER_API_KEY` or `PREDICTHQ_API_KEY` is set.
+Businesses from a different source (for example sample data from a `fake` test run) are removed on the next real scan, unless their pitch was approved. Google's terms limit storing Place content, so businesses nobody acted on are removed after 30 days and refreshed on every scan. A rules change reuses a scan under a day old; **Scan my area** always searches again.
 
-Google's terms limit storing Place content, so businesses nobody acted on are removed after 30 days and refreshed on every scan. A rules change re-picks pitches from the last scan if it's under a day old; **Scan my area** always searches again. The City of San Diego special-events permit data was last updated in 2021, so it isn't used.
-
-To try the scan without Google or Hunter keys (the emails are still written by Gemini, so `GEMINI_API_KEY` is needed):
+To try it without Google or Hunter keys (sample businesses and events; pitches are still written by Gemini, so `GEMINI_API_KEY` is needed):
 
 ```bash
 PLACES_PROVIDER=fake CONTACTS_PROVIDER=fake EVENTS_PROVIDER=fake ANALYST_PROVIDER=fake npm run dev

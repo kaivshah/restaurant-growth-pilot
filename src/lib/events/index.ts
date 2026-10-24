@@ -2,7 +2,7 @@ import { ProviderError } from "@/lib/llm";
 import { parseRetryAfter, withRetry } from "@/lib/llm/retry";
 import type { LatLng } from "@/lib/geo";
 
-export type EventCategory = "conference" | "expo" | "sports" | "community" | "concert" | "school" | "other";
+export type EventCategory = "conference" | "expo" | "corporate" | "sports" | "community" | "concert" | "school" | "other";
 
 export interface LocalEvent {
   source: string;
@@ -17,6 +17,7 @@ export interface LocalEvent {
   attendance: number | null;
   organizer: string | null;
   url: string | null;
+  description?: string | null;
 }
 
 export interface EventsProvider {

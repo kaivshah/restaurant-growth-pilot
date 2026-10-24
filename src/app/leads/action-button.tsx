@@ -4,16 +4,19 @@ import Link from "next/link";
 import { useActionState } from "react";
 import type { LeadActionState } from "./actions";
 
-/** A one-button form for a lead action, with its result shown underneath. */
+/** A one-button form for a lead or event action, with its result shown underneath. */
 export function ActionButton({
   action,
   id,
+  fields,
   label,
   busyLabel,
   className,
 }: {
   action: (prev: LeadActionState, form: FormData) => Promise<LeadActionState>;
-  id: string;
+  id?: string;
+  /** Extra hidden fields sent with the form */
+  fields?: Record<string, string>;
   label: string;
   busyLabel: string;
   className?: string;
@@ -21,7 +24,10 @@ export function ActionButton({
   const [state, run, pending] = useActionState(action, undefined);
   return (
     <form action={run} className="flex flex-col gap-1">
-      <input type="hidden" name="id" value={id} />
+      {id && <input type="hidden" name="id" value={id} />}
+      {Object.entries(fields ?? {}).map(([k, v]) => (
+        <input key={k} type="hidden" name={k} value={v} />
+      ))}
       <button type="submit" disabled={pending} className={className ?? "min-h-10 rounded-field border border-field px-3 text-sm font-bold hover:border-primary disabled:opacity-60"}>
         {pending ? busyLabel : label}
       </button>

@@ -40,7 +40,7 @@ export function scoreLead(p: Place, distanceMiles: number, radiusMiles: number):
   return { score: Math.max(0, Math.min(100, score)), reasons, excluded: null };
 }
 
-const EVENT_WEIGHT: Record<string, number> = { conference: 35, expo: 35, sports: 25, community: 20, school: 20, concert: 8, other: 10 };
+const EVENT_WEIGHT: Record<string, number> = { conference: 35, expo: 35, corporate: 35, sports: 25, community: 20, school: 20, concert: 8, other: 10 };
 
 /** Events worth reaching out about: inside the radius and 7–60 days ahead. */
 export function scoreEvent(
