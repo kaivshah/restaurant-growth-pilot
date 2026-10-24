@@ -55,8 +55,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
 });
 
-/** The signed-in user's id, or null. */
+/**
+ * The signed-in user's id, or null. A sign-in whose user no longer exists
+ * (e.g. after the database was reset) counts as signed out.
+ */
 export async function currentUserId(): Promise<string | null> {
   const session = await auth();
-  return session?.user?.id ?? null;
+  const id = session?.user?.id;
+  if (!id) return null;
+  const user = await db.user.findUnique({ where: { id }, select: { id: true } });
+  return user?.id ?? null;
 }
