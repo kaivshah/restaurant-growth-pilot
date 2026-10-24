@@ -4,6 +4,7 @@ import { Logo } from "@/components/ui";
 
 const NAV = [
   { href: "/inbox", label: "Approval Inbox", key: "inbox" },
+  { href: "/leads", label: "Leads & events", key: "leads" },
   { href: "/setup/reports", label: "Reports", key: "reports" },
   { href: "/setup/rules", label: "Settings", key: "settings" },
 ];

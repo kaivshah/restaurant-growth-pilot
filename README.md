@@ -6,6 +6,36 @@ Name not decided yet, so the app calls itself **product**.
 
 ## What works now
 
+### Milestone 3a: catering leads and pitches (sending comes in 3b)
+
+After setup, and whenever the owner clicks **Scan my area**, a background job:
+
+1. Finds the store on the map (Google Geocoding) and searches the delivery radius for offices, coworking spaces, schools, clinics, gyms and event venues (Google Places API (New) Text Search).
+2. Scores each place (type, distance, whether it has a real website, review count) and explains the score in plain words. Closed places and places outside the radius are left out.
+3. Looks up who orders food at the best places (Hunter.io domain search, office managers and admins first), and verifies the top email.
+4. Finds upcoming events 7–60 days ahead (PredictHQ and/or Ticketmaster), scores them, and matches each venue to a nearby place so the venue can be pitched 2–6 weeks ahead.
+5. Lets the AI lead analyst choose who to pitch and what to offer (free cookie platter, drinks tray or delivery, as the owner's rules allow), with the same checks as the offer analyst: every number it writes must come from the scan. With the analyst off, the top-scored leads and event venues get the default offer.
+6. Drafts a pitch email for each, which must say a franchise is independently owned and operated.
+
+The **Catering** tab in the Approval Inbox shows each pitch with its fit score, reasons, event, contact (editable) and email (editable by hand or with AI). Skipping with a reason like "Wrong kind of business" keeps that business out of future pitches. Approving marks it ready: **nothing is sent yet**. Gmail sending, follow-ups and replies come in milestone 3b. The **Leads & events** page lists every business and event found, with filters, Google Maps links, exclude/include and manual contacts.
+
+**Keys and quotas** (all optional; `fake` providers let you try everything without keys, see `.env.example`):
+
+| Service | Variable | Notes |
+|---|---|---|
+| Google Maps Platform | `GOOGLE_MAPS_API_KEY`, `PLACES_PROVIDER=google` | Enable the Geocoding API and Places API (New). One scan makes about 7 calls. |
+| Hunter.io | `HUNTER_API_KEY`, `CONTACTS_PROVIDER=hunter` | The free plan has 25 searches a month; each scan uses at most `HUNTER_MAX_LOOKUPS` (15), and a domain isn't searched again for 30 days. |
+| PredictHQ | `PREDICTHQ_API_KEY`, `PREDICTHQ_LOCATION_ID` | Best source for conferences and expos with attendance. The free plan searches saved locations only. |
+| Ticketmaster Discovery | `TICKETMASTER_API_KEY` | Free, 5,000 calls a day. Ticketed games and concerts. |
+
+Google's terms limit storing Place content, so businesses nobody acted on are removed after 30 days and refreshed on every scan. A rules change re-picks pitches from the last scan if it's under a day old; **Scan my area** always searches again. The City of San Diego special-events permit data was last updated in 2021, so it isn't used.
+
+To try it without keys:
+
+```bash
+PLACES_PROVIDER=fake CONTACTS_PROVIDER=fake EVENTS_PROVIDER=fake ANALYST_PROVIDER=fake npm run dev
+```
+
 ### Milestone 2.5: the AI analyst
 
 Turn it on with `ANALYST_PROVIDER` and the AI takes part in **deciding** what to offer, not just writing the email.
@@ -118,13 +148,17 @@ Real store reports go in `fixtures/private/`, which git ignores. When files are 
 | `src/lib/offers/` | Offer ideas and brand-rule checks |
 | `src/lib/llm/` | Copywriter providers (template, Ollama, Claude), retries, output checks |
 | `src/lib/analyst/` | AI analyst: data tools, the tool-use loop (Claude, Ollama, scripted), checks and conversion to offers |
-| `src/lib/drafts/` | Background job that builds drafts and logs AI calls |
+| `src/lib/drafts/` | Background jobs (offer drafts and area scans) and AI call logging |
+| `src/lib/places/`, `src/lib/contacts/`, `src/lib/events/` | Google Places, Hunter.io, PredictHQ and Ticketmaster clients, each with a fake for testing |
+| `src/lib/leads/` | Area scan pipeline, lead and event scoring, pitch drafting |
+| `src/lib/analyst/leads/` | AI lead analyst: lead tools, pitch checks |
 | `src/app/setup/` | The four setup steps and their server actions |
-| `src/app/inbox/` | Approval Inbox |
+| `src/app/inbox/` | Approval Inbox (Customer offers and Catering tabs) |
+| `src/app/leads/` | Leads & events page |
 | `src/auth.ts` | Auth.js setup (Google, plus the dev-only demo login) |
 | `prisma/schema.prisma` | Database tables |
 
 ## Next milestones
 
-3. **Catering outreach:** area scan, lead scoring, email lookup, drafted pitches, sending from Gmail or Outlook with follow-ups, and reply tracking.
+3b. **Catering sending:** Gmail sending with a daily cap, follow-ups on day 4 and 10, unsubscribe and suppression list, reply tracking and a pipeline board.
 4. **Customer list:** QR email sign-up, redemption codes, email offers and results.

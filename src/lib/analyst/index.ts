@@ -1,19 +1,25 @@
 import type { OfferCandidate } from "@/lib/offers";
 import type { AnalystContext } from "./context";
 import { fakeAnalyst } from "./fake";
+import { fakeLeadAnalyst } from "./leads/fake";
 import { type AnalystModel, claudeAnalyst, ollamaAnalyst } from "./models";
 import type { AnalysisOutcome } from "./run";
 import { similar } from "./verify";
 
 export type { AnalystContext } from "./context";
 export { runAnalysis } from "./run";
+export { runLeadAnalysis, defaultPitches } from "./leads";
+export type { LeadContext, LeadInfo, EventInfo, LeadOutcome, Pitch } from "./leads";
 export type { AnalysisOutcome, Rejected } from "./run";
 export { proposalToOffer, citations } from "./to-offer";
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
-/** The analyst chosen by ANALYST_PROVIDER, or null when it's off (rule ideas only). */
-export function analystFromEnv(env: NodeJS.ProcessEnv = process.env): AnalystModel | null {
+/**
+ * The analyst chosen by ANALYST_PROVIDER, or null when it's off (rule ideas
+ * only). The purpose only matters for the scripted fake.
+ */
+export function analystFromEnv(purpose: "offers" | "leads" = "offers", env: NodeJS.ProcessEnv = process.env): AnalystModel | null {
   const choice = (env.ANALYST_PROVIDER ?? "off").toLowerCase();
   if (choice === "anthropic") {
     if (!env.ANTHROPIC_API_KEY) {
@@ -26,7 +32,7 @@ export function analystFromEnv(env: NodeJS.ProcessEnv = process.env): AnalystMod
   if (choice === "ollama") {
     return ollamaAnalyst(env.OLLAMA_URL || "http://localhost:11434", env.ANALYST_MODEL || env.OLLAMA_MODEL || "qwen2.5:7b-instruct");
   }
-  if (choice === "fake" && env.NODE_ENV !== "production") return fakeAnalyst();
+  if (choice === "fake" && env.NODE_ENV !== "production") return purpose === "leads" ? fakeLeadAnalyst() : fakeAnalyst();
   return null;
 }
 

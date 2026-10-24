@@ -169,7 +169,9 @@ export async function saveRules(_prev: FormState, formData: FormData): Promise<F
     },
   });
   // Rules may have changed which offers are allowed; rebuild drafts in the background.
+  // The area scan reuses a scan from the last day, so this only re-picks the pitches.
   await enqueueDraftJob(restaurant.id);
+  await enqueueDraftJob(restaurant.id, "LEADS");
   after(() => processDraftJobs());
   redirect("/inbox");
 }

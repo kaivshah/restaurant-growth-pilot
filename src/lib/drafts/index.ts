@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Prisma, Restaurant } from "@prisma/client";
+import type { JobKind, Prisma, Restaurant } from "@prisma/client";
 import { analystFromEnv, buildContext, estimateCostUsd, mergeIdeas, proposalToOffer, runAnalysis } from "@/lib/analyst";
 import type { AnalysisOutcome, AnalystContext } from "@/lib/analyst";
 import { db } from "@/lib/db";
@@ -36,7 +36,7 @@ export async function logCall(restaurantId: string | null, log: CallLog | null) 
 }
 
 /** Reports the owner hasn't marked as wrong. Drafting waits until at least one is confirmed. */
-async function usableReports(restaurantId: string) {
+export async function usableReports(restaurantId: string) {
   const rows = await db.reportUpload.findMany({
     where: { restaurantId, status: { not: "FLAGGED" } },
     orderBy: { periodEnd: "desc" },
@@ -58,7 +58,7 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
   if (!analyst) return { offers: baseline, analysisRunId: null, note: "standard ideas only" };
 
   const decisions = await db.draft.findMany({
-    where: { restaurantId: restaurant.id, status: { in: ["APPROVED", "SKIPPED"] } },
+    where: { restaurantId: restaurant.id, kind: "CUSTOMER_OFFER", status: { in: ["APPROVED", "SKIPPED"] } },
     orderBy: { decidedAt: "desc" },
     take: 30,
   });
@@ -80,7 +80,7 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
     .digest("hex");
 
   const previous = await db.analysisRun.findFirst({
-    where: { restaurantId: restaurant.id, dataHash, status: "DONE" },
+    where: { restaurantId: restaurant.id, purpose: "offers", dataHash, status: "DONE" },
     orderBy: { createdAt: "desc" },
   });
   if (previous) {
@@ -147,9 +147,9 @@ function citationsFor(evidence: AnalysisOutcome["findings"][number]["evidence"],
   });
 }
 
-const json = (v: unknown) => JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
+export const json = (v: unknown) => JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
 
-async function draftsToday(restaurantId: string) {
+export async function draftsToday(restaurantId: string) {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
   return db.draft.count({ where: { restaurantId, createdAt: { gte: start } } });
@@ -215,14 +215,19 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
   }
   // Standard ideas the analyst dropped leave the inbox if they were still waiting.
   const keys = offers.map((o) => o.key);
-  const removed = await db.draft.deleteMany({ where: { restaurantId, status: "PENDING", offerKey: { notIn: keys } } });
+  const removed = await db.draft.deleteMany({ where: { restaurantId, kind: "CUSTOMER_OFFER", status: "PENDING", offerKey: { notIn: keys } } });
   return `Created ${created}, unchanged ${reused}${removed.count ? `, removed ${removed.count}` : ""}${fellBack ? `, ${fellBack} written from templates after an AI error` : ""}; ${note}.`;
 }
 
-/** Queue a rebuild for a restaurant, unless one is already waiting. */
-export async function enqueueDraftJob(restaurantId: string) {
-  const waiting = await db.draftJob.findFirst({ where: { restaurantId, status: "QUEUED" } });
-  return waiting ?? db.draftJob.create({ data: { restaurantId } });
+/**
+ * Queue offer drafting or an area scan for a restaurant, unless the same kind
+ * is already waiting. force makes a LEADS job search the area again even if
+ * the last scan is recent.
+ */
+export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFFERS", force = false) {
+  const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind, status: "QUEUED" } });
+  if (waiting) return force && !waiting.force ? db.draftJob.update({ where: { id: waiting.id }, data: { force } }) : waiting;
+  return db.draftJob.create({ data: { restaurantId, kind, force } });
 }
 
 let draining = false;
@@ -247,7 +252,10 @@ export async function processDraftJobs(maxJobs = 20) {
       });
       if (claimed.count === 0) continue;
       try {
-        const message = await buildDraftsFor(next.restaurantId);
+        const message =
+          next.kind === "LEADS"
+            ? await (await import("@/lib/leads")).scanArea(next.restaurantId, { force: next.force })
+            : await buildDraftsFor(next.restaurantId);
         await db.draftJob.update({ where: { id: next.id }, data: { status: "DONE", message, finishedAt: new Date() } });
       } catch (err) {
         await db.draftJob.update({

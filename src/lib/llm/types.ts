@@ -10,6 +10,22 @@ export interface FactsPacket {
     /** Placeholder the message must contain, if any */
     codePlaceholder: "[CODE]" | null;
   };
+  /** Set for catering pitch emails to a business */
+  pitch?: PitchFacts;
+}
+
+/** What a catering pitch email may say about the lead and the offer. */
+export interface PitchFacts {
+  company: string;
+  contactFirstName: string | null;
+  /** e.g. "office", "event venue" */
+  category: string;
+  distanceMiles: number;
+  /** e.g. "a free cookie platter" */
+  offer: string;
+  minOrder: number;
+  occasion: string;
+  event: { title: string; date: string } | null;
 }
 
 export interface OfferCopy {

@@ -1,6 +1,10 @@
 import type { FactsPacket, OfferCopy } from "./types";
 
-export const LIMITS = { headline: 90, body: 600 };
+export const LIMITS = { headline: 90, body: 600, pitchBody: 1200 };
+
+export const INDEPENDENT_LINE = "independently owned and operated";
+
+export const bodyLimit = (isPitch: boolean) => (isPitch ? LIMITS.pitchBody : LIMITS.body);
 
 /**
  * Checks LLM output before it can reach the inbox. Returns a list of
@@ -13,7 +17,7 @@ export function validateCopy(copy: OfferCopy, packet: FactsPacket): string[] {
   if (!headline) problems.push("Headline is empty.");
   if (!body) problems.push("Message is empty.");
   if (headline.length > LIMITS.headline) problems.push(`Headline is longer than ${LIMITS.headline} characters.`);
-  if (body.length > LIMITS.body) problems.push(`Message is longer than ${LIMITS.body} characters.`);
+  if (body.length > bodyLimit(Boolean(packet.pitch))) problems.push(`Message is longer than ${bodyLimit(Boolean(packet.pitch))} characters.`);
 
   const allowedText = [packet.offer.title, packet.offer.schedule, ...packet.facts].join(" ");
   const text = `${headline} ${body}`;
@@ -32,5 +36,9 @@ export function validateCopy(copy: OfferCopy, packet: FactsPacket): string[] {
     problems.push(`Message must include ${packet.rules.codePlaceholder} where the redemption code goes.`);
   }
   if (/<[a-z][^>]*>/i.test(text)) problems.push("Contains HTML.");
+  // A franchisee writing to a business must not look like head office.
+  if (packet.pitch && packet.restaurant.kind === "FRANCHISE" && !body.toLowerCase().includes(INDEPENDENT_LINE)) {
+    problems.push(`A franchise pitch must say the restaurant is ${INDEPENDENT_LINE}.`);
+  }
   return problems;
 }

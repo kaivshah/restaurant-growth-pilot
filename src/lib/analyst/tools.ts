@@ -16,9 +16,9 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 
-export interface ToolDef<A = unknown> extends ToolSpec {
+export interface ToolDef<A = unknown, C = AnalystContext> extends ToolSpec {
   parse: (input: unknown) => A;
-  run: (ctx: AnalystContext, args: A) => unknown;
+  run: (ctx: C, args: A) => unknown;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;

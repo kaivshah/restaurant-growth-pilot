@@ -4,7 +4,7 @@ import { useActionState, useState } from "react";
 import { Notice } from "@/components/ui";
 import { type CopyState, rewriteDraft, saveDraftCopy } from "./actions";
 
-const CHIPS = ["Shorter", "Friendlier", "More playful", "Add an end date", "Also in Spanish"];
+const OFFER_CHIPS = ["Shorter", "Friendlier", "More playful", "Add an end date", "Also in Spanish"];
 
 type Stamped = (CopyState & { at: number }) | undefined;
 
@@ -15,6 +15,10 @@ export function CopyEditor({
   body,
   rewritesLeft,
   locked,
+  maxBody = 600,
+  rows = 5,
+  bodyLabel = "Message",
+  chips = OFFER_CHIPS,
 }: {
   id: string;
   copyLabel: string;
@@ -22,6 +26,10 @@ export function CopyEditor({
   body: string;
   rewritesLeft: number;
   locked: boolean;
+  maxBody?: number;
+  rows?: number;
+  bodyLabel?: string;
+  chips?: string[];
 }) {
   // Stamp each result so the message and fields follow whichever action ran last.
   const [saved, save, saving] = useActionState<Stamped, FormData>(
@@ -59,15 +67,15 @@ export function CopyEditor({
       </div>
       <div className="flex flex-col gap-2">
         <label htmlFor={`body-${id}`} className="text-sm font-bold">
-          Message
+          {bodyLabel}
         </label>
         <textarea
           key={`b-${shownBody}`}
           id={`body-${id}`}
           name="body"
           defaultValue={shownBody}
-          rows={5}
-          maxLength={600}
+          rows={rows}
+          maxLength={maxBody}
           disabled={locked}
           className="rounded-field border border-field bg-surface px-4 py-3.5 leading-relaxed disabled:bg-ground"
         />
@@ -84,7 +92,7 @@ export function CopyEditor({
               Edit with AI <span className="font-semibold text-muted">· {left} {left === 1 ? "rewrite" : "rewrites"} left</span>
             </p>
             <div className="flex flex-wrap gap-2">
-              {CHIPS.map((c) => (
+              {chips.map((c) => (
                 <button
                   key={c}
                   type="button"

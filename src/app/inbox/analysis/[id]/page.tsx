@@ -10,6 +10,10 @@ type Offer = { key: string; title: string; schedule: string; why: string; confid
 type Rejected = { kind: string; title: string; reasons: string[] };
 type Decision = { key: string; action: "keep" | "change" | "drop"; reason: string };
 type ToolEntry = { id: string; name: string; input: unknown };
+type PitchEntry = { lead_id: string; offer: string; occasion: string; why: string; confidence: string };
+type SkipEntry = { lead_id: string; reason: string };
+
+const OFFER_SHORT: Record<string, string> = { free_cookie_platter: "Free cookie platter", free_drinks_tray: "Free drinks tray", free_delivery: "Free delivery" };
 
 const STANDARD_NAMES: Record<string, string> = {
   welcome: "Welcome cookie for joining the email list",
@@ -29,15 +33,21 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
   const rejected = (run.rejected as unknown as Rejected[] | null) ?? [];
   const decisions = (run.baselineDecisions as unknown as Decision[] | null) ?? [];
   const tools = (run.toolLog as unknown as ToolEntry[] | null) ?? [];
+  const leadsRun = run.purpose === "leads";
+  const chosen = leadsRun ? ((run.accepted as unknown as { pitches?: PitchEntry[]; skipped?: SkipEntry[] } | null) ?? {}) : {};
+  const leadIds = [...(chosen.pitches ?? []), ...(chosen.skipped ?? [])].map((p) => p.lead_id);
+  const leadNames = new Map(
+    (leadIds.length ? await db.lead.findMany({ where: { restaurantId: restaurant.id, id: { in: leadIds } }, select: { id: true, name: true } }) : []).map((l) => [l.id, l.name]),
+  );
   const when = run.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" });
 
   return (
     <AppShell current="inbox" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       <div className="flex flex-col gap-2">
-        <Link href="/inbox" className="font-bold">
+        <Link href={leadsRun ? "/inbox?tab=catering" : "/inbox"} className="font-bold">
           ← Back to the Approval Inbox
         </Link>
-        <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">How the AI decided</h1>
+        <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">{leadsRun ? "How the AI chose who to pitch" : "How the AI decided"}</h1>
         <p className="text-ink-2">
           Analysis of {when} · {run.provider === "fake" ? "scripted test analyst" : `${run.provider} ${run.model}`} · {run.toolCalls} data lookups
           {run.estimatedCostUsd != null ? ` · about $${run.estimatedCostUsd.toFixed(4)}` : ""}
@@ -51,6 +61,7 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
         </Card>
       )}
 
+      {!leadsRun && (
       <Card className="flex flex-col gap-4 p-6">
         <h2 className="text-lg font-bold">What it found</h2>
         {findings.length === 0 ? (
@@ -73,8 +84,29 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
           </ul>
         )}
       </Card>
+      )}
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
+        {leadsRun ? (
+          <Card className="flex flex-col gap-4 p-6">
+            <h2 className="text-lg font-bold">Leads it chose that passed every check</h2>
+            {!chosen.pitches?.length ? (
+              <p className="text-ink-2">None this time.</p>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {chosen.pitches.map((p) => (
+                  <li key={p.lead_id} className="flex flex-col gap-1 border-t border-sand pt-3">
+                    <p className="font-bold">{leadNames.get(p.lead_id) ?? "A business no longer in your scan"}</p>
+                    <p className="text-sm text-muted">
+                      {OFFER_SHORT[p.offer] ?? p.offer} · {p.occasion} · {p.confidence} confidence
+                    </p>
+                    <p className="text-[15px] text-ink-2">{p.why}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        ) : (
         <Card className="flex flex-col gap-4 p-6">
           <h2 className="text-lg font-bold">Offers it proposed that passed every check</h2>
           {accepted.length === 0 ? (
@@ -94,10 +126,13 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
             </ul>
           )}
         </Card>
+        )}
 
         <Card className="flex flex-col gap-4 p-6">
           <h2 className="text-lg font-bold">Blocked by our checks</h2>
-          <p className="text-sm text-muted">The AI suggested these, but they broke a rule or quoted a number that isn&apos;t in your reports, so they never reached your inbox.</p>
+          <p className="text-sm text-muted">
+            The AI suggested these, but they broke a rule or quoted a number that isn&apos;t in {leadsRun ? "the scan" : "your reports"}, so they never reached your inbox.
+          </p>
           {rejected.length === 0 ? (
             <p className="text-ink-2">Nothing was blocked.</p>
           ) : (
@@ -119,6 +154,23 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
         </Card>
       </div>
 
+      {leadsRun ? (
+        <Card className="flex flex-col gap-4 p-6">
+          <h2 className="text-lg font-bold">Leads it decided not to pitch</h2>
+          {!chosen.skipped?.length ? (
+            <p className="text-ink-2">It didn&apos;t list any.</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {chosen.skipped.map((x) => (
+                <li key={x.lead_id} className="border-t border-sand pt-2">
+                  <strong>{leadNames.get(x.lead_id) ?? "A business no longer in your scan"}</strong>
+                  <span className="block text-ink-2">{x.reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      ) : (
       <Card className="flex flex-col gap-4 p-6">
         <h2 className="text-lg font-bold">What it decided about the standard ideas</h2>
         {decisions.length === 0 ? (
@@ -139,6 +191,7 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
           </ul>
         )}
       </Card>
+      )}
 
       <Card className="flex flex-col gap-3 p-6">
         <h2 className="text-lg font-bold">Data it looked at</h2>

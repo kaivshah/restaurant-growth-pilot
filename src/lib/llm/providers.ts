@@ -4,7 +4,7 @@ import { z } from "zod/v4";
 import { SYSTEM_PROMPT, rewriteRequest, writeRequest } from "./prompt";
 import { parseRetryAfter } from "./retry";
 import { type CopyProvider, type FactsPacket, type OfferCopy, ProviderError, type WriteResult } from "./types";
-import { LIMITS } from "./validate";
+import { INDEPENDENT_LINE, LIMITS } from "./validate";
 
 const CopySchema = z.object({
   headline: z.string(),
@@ -15,7 +15,7 @@ const copyJsonSchema = {
   type: "object",
   properties: {
     headline: { type: "string", maxLength: LIMITS.headline },
-    body: { type: "string", maxLength: LIMITS.body },
+    body: { type: "string", maxLength: LIMITS.pitchBody },
   },
   required: ["headline", "body"],
   additionalProperties: false,
@@ -23,7 +23,29 @@ const copyJsonSchema = {
 
 // ---------- Templates: free, offline, always available ----------
 
+function templatePitch(packet: FactsPacket): OfferCopy {
+  const p = packet.pitch!;
+  const name = packet.restaurant.name;
+  const what = `${p.occasion.charAt(0).toLowerCase()}${p.occasion.slice(1)}${p.event ? ` on ${p.event.date}` : ""}`;
+  const lines = [
+    `Hi ${p.contactFirstName ?? "there"},`,
+    "",
+    `I run ${name}, just ${p.distanceMiles} mi from ${p.company}. If you're planning ${what}, we'd love to help: sub platters, wraps and salads, delivered and set up on time.`,
+    "",
+    `To say hello, ${p.offer} is on us with your first catering order for ${p.minOrder} or more people.`,
+    "",
+    "Just reply with a date and headcount and I'll send over a menu and a quote.",
+    "",
+    "Thanks,",
+    `The team at ${name}`,
+  ];
+  if (packet.restaurant.kind === "FRANCHISE") lines.push("", `${name} is ${INDEPENDENT_LINE}.`);
+  const subject = p.event ? `Lunch for ${p.event.title}?` : `Team lunch for ${p.company}? ${p.offer.replace(/^a /, "A ")} on us`;
+  return { headline: subject.slice(0, LIMITS.headline), body: lines.join("\n") };
+}
+
 function templateCopy(packet: FactsPacket): OfferCopy {
+  if (packet.pitch) return templatePitch(packet);
   const name = packet.restaurant.name;
   switch (packet.offer.key) {
     case "welcome":

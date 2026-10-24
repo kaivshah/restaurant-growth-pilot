@@ -60,6 +60,21 @@ export function checkTextNumbers(text: string, log: ToolLog, extra: number[] = [
   return problems;
 }
 
+/**
+ * Plain numbers with three or more digits (e.g. "1,200 attendees") must also
+ * come from the data. Years like 2026 are allowed.
+ */
+export function checkPlainNumbers(text: string, log: ToolLog): string[] {
+  const known = collectNumbers(log.map((c) => c.output));
+  const problems: string[] = [];
+  for (const m of text.matchAll(/(?<![$\d.,])(\d{1,3}(?:,\d{3})+|\d{3,})(?![\d%])/g)) {
+    const n = parseFloat(m[0].replace(/,/g, ""));
+    if (n >= 2000 && n <= 2100 && !m[0].includes(",")) continue;
+    if (!known.some((k) => Math.abs(k - n) <= Math.max(1, Math.abs(k) * 0.01))) problems.push(`Says "${m[0]}", which doesn't match any number in the data.`);
+  }
+  return problems;
+}
+
 function openWindow(ctx: AnalystContext): { first: number; last: number } | null {
   const dp = pick(ctx, "dayPart");
   if (!dp) return null;

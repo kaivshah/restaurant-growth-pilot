@@ -96,18 +96,23 @@ model Restaurant {
   llmCalls             LlmCall[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
+  leads                Lead[]
+  leadScans            LeadScan[]
+  events               Event[]
 
   @@index([ownerId])
 }
 
 model Outlet {
-  id           String     @id @default(cuid())
-  restaurantId String
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  address      String
-  latitude     Float?
-  longitude    Float?
-  createdAt    DateTime   @default(now())
+  id              String     @id @default(cuid())
+  restaurantId    String
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  address         String
+  latitude        Float?
+  longitude       Float?
+  /// The address the coordinates were looked up for; re-geocode when it changes
+  geocodedAddress String?
+  createdAt       DateTime   @default(now())
 }
 
 enum ReportStatus {
@@ -155,6 +160,12 @@ enum DraftStatus {
 /// confirmed reports; only headline and body are written by the LLM.
 model Draft {
   id            String       @id @default(cuid())
+  leadId        String?
+  lead          Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  contactId     String?
+  contact       Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  eventId       String?
+  event         Event?       @relation(fields: [eventId], references: [id], onDelete: SetNull)
   restaurantId  String
   restaurant    Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   kind          DraftKind    @default(CUSTOMER_OFFER)
@@ -197,6 +208,11 @@ model Draft {
   @@index([restaurantId, status])
 }
 
+enum JobKind {
+  OFFERS // customer offer ideas from reports
+  LEADS // scan the area and draft catering pitches
+}
+
 enum JobStatus {
   QUEUED
   RUNNING
@@ -209,6 +225,9 @@ model DraftJob {
   id           String     @id @default(cuid())
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  kind         JobKind    @default(OFFERS)
+  /// LEADS only: search the area again even if the last scan is recent
+  force        Boolean    @default(false)
   status       JobStatus  @default(QUEUED)
   message      String?
   createdAt    DateTime   @default(now())
@@ -251,6 +270,8 @@ model AnalysisRun {
   id                String         @id @default(cuid())
   restaurantId      String
   restaurant        Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// "offers" (customer offers from reports) or "leads" (catering pitches)
+  purpose           String         @default("offers")
   provider          String
   model             String
   status            AnalysisStatus @default(RUNNING)
@@ -275,5 +296,124 @@ model AnalysisRun {
   createdAt         DateTime       @default(now())
   finishedAt        DateTime?
 
+  @@index([restaurantId, purpose, createdAt])
+}
+
+// ---------- Catering leads (milestone 3a) ----------
+
+enum LeadStatus {
+  NEW
+  DRAFTED
+  APPROVED
+  EXCLUDED
+}
+
+/// A nearby business found through Google Places (or the fake provider).
+/// Google's terms limit storing Place content, so rows are refreshed or
+/// removed after 30 days; only placeId is kept long-term.
+model Lead {
+  id                String     @id @default(cuid())
+  restaurantId      String
+  restaurant        Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  placeId           String
+  source            String
+  name              String
+  /// office | coworking | school | clinic | gym | venue | other
+  category          String
+  types             String[]
+  address           String
+  latitude          Float
+  longitude         Float
+  distanceMiles     Float
+  website           String?
+  phone             String?
+  ratingCount       Int?
+  businessStatus    String?
+  fitScore          Int
+  scoreReasons      String[]
+  status            LeadStatus @default(NEW)
+  excludeReason     String?
+  fetchedAt         DateTime
+  /// When contacts were last looked up for this lead's website
+  contactsCheckedAt DateTime?
+  contacts          Contact[]
+  drafts            Draft[]
+  venueFor          Event[]
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@unique([restaurantId, placeId])
+  @@index([restaurantId, status])
+}
+
+model Contact {
+  id           String   @id @default(cuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  name         String?
+  role         String?
+  email        String
+  /// Hunter's confidence score, 0–100
+  confidence   Int?
+  /// "valid" | "accept_all" | "unknown" | "invalid" | null when not checked
+  verification String?
+  /// "hunter" | "owner" | "fake"
+  source       String
+  drafts       Draft[]
+  createdAt    DateTime @default(now())
+
+  @@unique([leadId, email])
+}
+
+model LeadScan {
+  id               String     @id @default(cuid())
+  restaurantId     String
+  restaurant       Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  status           JobStatus  @default(RUNNING)
+  placesProvider   String
+  contactsProvider String
+  eventsProvider   String
+  leadsFound       Int        @default(0)
+  contactsFound    Int        @default(0)
+  eventsFound      Int        @default(0)
+  pitchesDrafted   Int        @default(0)
+  message          String?
+  createdAt        DateTime   @default(now())
+  finishedAt       DateTime?
+
   @@index([restaurantId, createdAt])
+}
+
+/// An upcoming local event that could need catering.
+model Event {
+  id            String     @id @default(cuid())
+  restaurantId  String
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// "predicthq" | "ticketmaster" | "sandiego-permits" | "fake"
+  source        String
+  externalId    String
+  title         String
+  /// conference | expo | sports | community | concert | school | other
+  category      String
+  startsAt      DateTime
+  endsAt        DateTime?
+  venueName     String?
+  venueAddress  String?
+  latitude      Float?
+  longitude     Float?
+  distanceMiles Float?
+  attendance    Int?
+  organizer     String?
+  url           String?
+  /// The lead for this event's venue, when it could be matched to a nearby place
+  venueLeadId   String?
+  venueLead     Lead?      @relation(fields: [venueLeadId], references: [id], onDelete: SetNull)
+  fitScore      Int
+  scoreReasons  String[]
+  fetchedAt     DateTime
+  drafts        Draft[]
+  createdAt     DateTime   @default(now())
+
+  @@unique([restaurantId, source, externalId])
+  @@index([restaurantId, startsAt])
 }

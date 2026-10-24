@@ -7,8 +7,10 @@ import { REWRITE_LIMIT, processDraftJobs, requeueStaleJobs } from "@/lib/drafts"
 import { requireRestaurant } from "@/lib/restaurant";
 import { approveDraft, refreshIdeas, setSkipReason, skipDraft, undoDraft } from "./actions";
 import { AutoRefresh } from "./auto-refresh";
+import { CateringTab } from "./catering";
 import { CopyEditor } from "./copy-editor";
 import { HourlyChart } from "./hourly-chart";
+import { SourcePill, Tick, fmtValue } from "./parts";
 import { AppShell } from "./shell";
 
 const SKIP_REASONS = ["Not right for my store", "Too generous", "Wrong timing", "Brand wouldn't allow it"];
@@ -20,33 +22,9 @@ type Evidence =
 
 type Finding = { title: string; detail: string; citations: { label: string; value: number; source: string }[] };
 
-const fmtValue = (v: number) => (Number.isInteger(v) ? v.toLocaleString("en-US") : v.toLocaleString("en-US", { maximumFractionDigits: 2 }));
-
-function SourcePill({ source, confidence }: { source: string; confidence: string | null }) {
-  return source === "AI_ANALYST" ? (
-    <span className="rounded-full bg-primary-soft px-2.5 py-0.5 text-xs font-extrabold text-primary-ink">
-      AI idea{confidence ? ` · ${confidence} confidence` : ""}
-    </span>
-  ) : (
-    <span className="rounded-full bg-sand px-2.5 py-0.5 text-xs font-bold text-ink-2">Standard idea</span>
-  );
-}
-
 function greeting(now = new Date()) {
   const h = Number(now.toLocaleString("en-US", { hour: "numeric", hour12: false, timeZone: "America/Los_Angeles" }));
   return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-}
-
-function Tick({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="grid grid-cols-[18px_minmax(0,1fr)] items-center gap-2">
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-        <circle cx="9" cy="9" r="8" fill="#E4F1E8" />
-        <path d="M5.5 9.3l2.3 2.3 4.7-4.7" stroke="#2E7D4F" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      {children}
-    </span>
-  );
 }
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<{ tab?: string; d?: string }> }) {
@@ -58,28 +36,33 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   await requeueStaleJobs();
   after(() => processDraftJobs());
 
-  const [drafts, job, lastRun] = await Promise.all([
+  const [drafts, job, leadsJob, lastScan, pendingPitches, lastRun] = await Promise.all([
     db.draft.findMany({
       where: { restaurantId: restaurant.id, kind: "CUSTOMER_OFFER" },
       orderBy: [{ createdAt: "asc" }],
     }),
-    db.draftJob.findFirst({ where: { restaurantId: restaurant.id }, orderBy: { createdAt: "desc" } }),
-    db.analysisRun.findFirst({ where: { restaurantId: restaurant.id, status: { not: "RUNNING" } }, orderBy: { createdAt: "desc" } }),
+    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "OFFERS" }, orderBy: { createdAt: "desc" } }),
+    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "LEADS" }, orderBy: { createdAt: "desc" } }),
+    db.leadScan.findFirst({ where: { restaurantId: restaurant.id, status: "DONE" }, orderBy: { createdAt: "desc" } }),
+    db.draft.count({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: "PENDING" } }),
+    db.analysisRun.findFirst({ where: { restaurantId: restaurant.id, purpose: "offers", status: { not: "RUNNING" } }, orderBy: { createdAt: "desc" } }),
   ]);
   const findings = (lastRun?.status === "DONE" ? (lastRun.findings as unknown as Finding[]) : null) ?? [];
-  const pending = drafts.filter((x) => x.status === "PENDING").length;
+  const pendingOffers = drafts.filter((x) => x.status === "PENDING").length;
+  const pending = pendingOffers + pendingPitches;
   const working = job?.status === "QUEUED" || job?.status === "RUNNING";
+  const scanning = leadsJob?.status === "QUEUED" || leadsJob?.status === "RUNNING";
   const selected = drafts.find((x) => x.id === d) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
 
   const cards = [
-    { href: "/inbox?tab=catering", tab: "catering", n: 0, title: "Catering pitches", sub: `Offices and schools within ${restaurant.radiusMiles} mi` },
-    { href: "/inbox?tab=offers", tab: "offers", n: pending, title: "Customer offers", sub: "Ideas from your weekly reports" },
+    { href: "/inbox?tab=catering", tab: "catering", n: pendingPitches, title: "Catering pitches", sub: `Offices, schools and events within ${restaurant.radiusMiles} mi` },
+    { href: "/inbox?tab=offers", tab: "offers", n: pendingOffers, title: "Customer offers", sub: "Ideas from your weekly reports" },
     { href: null, tab: "replies", n: 0, title: "Replies waiting", sub: "We'll flag interested replies here" },
   ];
 
   return (
     <AppShell current="inbox" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
-      {working && <AutoRefresh />}
+      {(working || scanning) && <AutoRefresh />}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">{greeting()}</h1>
@@ -92,11 +75,13 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
             Nothing is sent until you approve it.
           </p>
         </div>
-        <form action={refreshIdeas}>
-          <button type="submit" disabled={working} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60">
-            {working ? "Preparing ideas…" : "Refresh ideas"}
-          </button>
-        </form>
+        {tab !== "catering" && (
+          <form action={refreshIdeas}>
+            <button type="submit" disabled={working} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60">
+              {working ? "Preparing ideas…" : "Refresh ideas"}
+            </button>
+          </form>
+        )}
       </div>
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(220px,100%),1fr))] gap-4">
@@ -123,12 +108,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       </div>
 
       {tab === "catering" ? (
-        <Card className="flex flex-col items-start gap-3 p-8">
-          <h2 className="text-xl font-bold">Catering outreach comes next</h2>
-          <p className="max-w-[62ch] text-ink-2">
-            The next update searches the {restaurant.radiusMiles} mi around your outlet for offices, schools and clinics, and drafts a catering pitch for each one for you to approve.
-          </p>
-        </Card>
+        <CateringTab restaurantId={restaurant.id} radiusMiles={restaurant.radiusMiles} selectedId={d} job={leadsJob} scan={lastScan} />
       ) : (
         <>
           {job?.status === "FAILED" && (
