@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rewriteOfferCopy, templateProvider, validateCopy, writeOfferCopy } from "./index";
+import { providerFromEnv, rewriteOfferCopy, validateCopy, writeOfferCopy } from "./index";
 import { parseRetryAfter, withRetry } from "./retry";
 import { type CopyProvider, type FactsPacket, ProviderError } from "./types";
 
@@ -107,45 +107,53 @@ describe("writeOfferCopy", () => {
       return good;
     });
     const out = await writeOfferCopy(p, packet, noSleep);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
     expect(out.writtenBy).toBe("fake:test");
-    expect(out.log?.outcome).toBe("retried-ok");
-    expect(out.log?.attempts).toBe(2);
+    expect(out.log.outcome).toBe("retried-ok");
+    expect(out.log.attempts).toBe(2);
   });
 
-  it("falls back to the template when the provider keeps failing", async () => {
-    const out = await writeOfferCopy(fake(async () => { throw new ProviderError("down", true); }), packet, noSleep);
-    expect(out.writtenBy).toBe("template");
-    expect(out.fellBack).toBe(true);
-    expect(out.log?.outcome).toBe("error");
-    expect(validateCopy(out, packet)).toEqual([]);
+  it("reports a busy provider as retryable instead of writing anything", async () => {
+    const out = await writeOfferCopy(fake(async () => { throw new ProviderError("down", true, 1000); }), packet, noSleep);
+    expect(out).toMatchObject({ ok: false, retryable: true, retryAfterMs: 1000 });
+    expect(out.log.outcome).toBe("error");
   });
 
-  it("falls back to the template when the AI breaks a rule", async () => {
-    const out = await writeOfferCopy(fake(async () => ({ headline: "50% off!", body: "Half price all day. [CODE]" })), packet, noSleep);
-    expect(out.writtenBy).toBe("template");
-    expect(out.log?.outcome).toBe("invalid-output");
+  it("doesn't retry a bad key later", async () => {
+    const out = await writeOfferCopy(fake(async () => { throw new ProviderError("bad key", false); }), packet, noSleep);
+    expect(out).toMatchObject({ ok: false, retryable: false });
   });
 
-  it("writes every template offer within the rules", async () => {
-    for (const key of ["welcome", "afternoon-drink", "weekend-bread"]) {
-      const p = {
-        ...packet,
-        offer: { ...packet.offer, key, title: key === "weekend-bread" ? "Free chips with any 6-inch sub, Sat–Mon" : packet.offer.title },
-        rules: { ...packet.rules, codePlaceholder: key === "welcome" ? null : ("[CODE]" as const) },
-      };
-      const out = await writeOfferCopy(templateProvider, p);
-      expect(validateCopy(out, p)).toEqual([]);
-    }
+  it("asks the AI to fix copy that breaks a rule, once", async () => {
+    const fixed = fake(async (n) => (n === 1 ? { headline: "50% off!", body: "Half price all day. [CODE]" } : good));
+    const out = await writeOfferCopy(fixed, packet, noSleep);
+    expect(out.ok).toBe(true);
+    expect(fixed.calls).toBe(2);
+
+    const stubborn = fake(async () => ({ headline: "50% off!", body: "Half price all day. [CODE]" }));
+    const bad = await writeOfferCopy(stubborn, packet, noSleep);
+    expect(bad).toMatchObject({ ok: false, retryable: false });
+    expect(bad.log.outcome).toBe("invalid-output");
   });
 });
 
 describe("rewriteOfferCopy", () => {
-  it("explains that templates can't rewrite", async () => {
-    const out = await rewriteOfferCopy(templateProvider, packet, good, "Shorter");
-    expect(out.ok).toBe(false);
-  });
   it("keeps the owner's draft when the rewrite breaks a rule", async () => {
     const out = await rewriteOfferCopy(fake(async () => ({ headline: "x", body: "$9 deal" })), packet, good, "Shorter", noSleep);
     expect(out.ok).toBe(false);
+  });
+  it("returns the rewritten copy", async () => {
+    const out = await rewriteOfferCopy(fake(async () => good), packet, { headline: "Old", body: "Old [CODE]" }, "Shorter", noSleep);
+    expect(out.ok && out.copy).toEqual(good);
+  });
+});
+
+describe("choosing a provider", () => {
+  it("defaults to Gemini and needs its key", () => {
+    expect(providerFromEnv({ GEMINI_API_KEY: "k" } as unknown as NodeJS.ProcessEnv)?.name).toBe("gemini");
+    expect(providerFromEnv({} as unknown as NodeJS.ProcessEnv)).toBeNull();
+    expect(providerFromEnv({ LLM_PROVIDER: "template" } as unknown as NodeJS.ProcessEnv)).toBeNull();
+    expect(providerFromEnv({ LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k" } as unknown as NodeJS.ProcessEnv)?.name).toBe("anthropic");
   });
 });

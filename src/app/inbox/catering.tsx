@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { DraftJob, LeadScan } from "@prisma/client";
 import { Card, Notice } from "@/components/ui";
 import { db } from "@/lib/db";
-import { REWRITE_LIMIT } from "@/lib/drafts";
+import { REWRITE_LIMIT, jobState } from "@/lib/drafts";
 import { LEAD_SKIP_REASONS } from "@/lib/leads/score";
 import { LIMITS } from "@/lib/llm/validate";
 import { approveDraft, scanMyArea, setSkipReason, skipDraft, undoDraft } from "./actions";
@@ -46,7 +46,7 @@ export async function CateringTab({
   });
   // Best leads first; decided ones sink to the bottom.
   drafts.sort((a, b) => Number(a.status !== "PENDING") - Number(b.status !== "PENDING") || (b.lead?.fitScore ?? 0) - (a.lead?.fitScore ?? 0));
-  const working = job?.status === "QUEUED" || job?.status === "RUNNING";
+  const working = jobState(job) === "working";
   const selected = drafts.find((x) => x.id === selectedId) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
   const ev = selected?.evidence as PitchEvidence | null;
 

@@ -3,9 +3,10 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { ButtonLink, Card, Notice } from "@/components/ui";
 import { db } from "@/lib/db";
-import { REWRITE_LIMIT, processDraftJobs, requeueStaleJobs } from "@/lib/drafts";
+import { REWRITE_LIMIT, jobState, processDraftJobs, requeueStaleJobs } from "@/lib/drafts";
 import { requireRestaurant } from "@/lib/restaurant";
 import { approveDraft, refreshIdeas, setSkipReason, skipDraft, undoDraft } from "./actions";
+import { AiStatus } from "./ai-status";
 import { AutoRefresh } from "./auto-refresh";
 import { CateringTab } from "./catering";
 import { CopyEditor } from "./copy-editor";
@@ -50,8 +51,8 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   const findings = (lastRun?.status === "DONE" ? (lastRun.findings as unknown as Finding[]) : null) ?? [];
   const pendingOffers = drafts.filter((x) => x.status === "PENDING").length;
   const pending = pendingOffers + pendingPitches;
-  const working = job?.status === "QUEUED" || job?.status === "RUNNING";
-  const scanning = leadsJob?.status === "QUEUED" || leadsJob?.status === "RUNNING";
+  const working = jobState(job) === "working";
+  const scanning = jobState(leadsJob) === "working";
   const selected = drafts.find((x) => x.id === d) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
 
   const cards = [
@@ -63,6 +64,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   return (
     <AppShell current="inbox" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       {(working || scanning) && <AutoRefresh />}
+      <AiStatus job={tab === "catering" ? leadsJob : job} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">{greeting()}</h1>

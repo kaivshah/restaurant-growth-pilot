@@ -5,7 +5,7 @@ import { z } from "zod";
 import { after } from "next/server";
 import { db } from "@/lib/db";
 import { REWRITE_LIMIT, enqueueDraftJob, logCall, processDraftJobs } from "@/lib/drafts";
-import { providerFromEnv, rewriteOfferCopy } from "@/lib/llm";
+import { missingAiReason, providerFromEnv, rewriteOfferCopy } from "@/lib/llm";
 import { LIMITS, bodyLimit } from "@/lib/llm/validate";
 import { pitchPacket } from "@/lib/leads";
 import { LEAD_SKIP_REASONS } from "@/lib/leads/score";
@@ -134,7 +134,9 @@ export async function rewriteDraft(_prev: CopyState, formData: FormData): Promis
   };
 
   if (!packet) return { error: "This business is no longer in your area scan.", ...current };
-  const result = await rewriteOfferCopy(providerFromEnv(), packet, current, instruction);
+  const provider = providerFromEnv();
+  if (!provider) return { error: `AI isn't set up. ${missingAiReason()}`, ...current };
+  const result = await rewriteOfferCopy(provider, packet, current, instruction);
   await logCall(restaurant.id, result.log);
   if (!result.ok) return { error: result.message, ...current };
 

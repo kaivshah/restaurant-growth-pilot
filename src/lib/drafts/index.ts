@@ -4,7 +4,7 @@ import { analystFromEnv, buildContext, estimateCostUsd, mergeIdeas, proposalToOf
 import type { AnalysisOutcome, AnalystContext } from "@/lib/analyst";
 import { db } from "@/lib/db";
 import { computeInsights } from "@/lib/insights";
-import { type FactsPacket, type CallLog, providerFromEnv, writeOfferCopy } from "@/lib/llm";
+import { AiBusyError, type FactsPacket, type CallLog, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
 import { type OfferCandidate, buildOffers, isBrandSafe } from "@/lib/offers";
 import type { ParsedReport } from "@/lib/reports";
 
@@ -96,6 +96,12 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
   const started = Date.now();
   // Ideas the owner already decided on shouldn't come back under a new name.
   const outcome = await runAnalysis(analyst, ctx, baseline, decisions.map((d) => d.title));
+  if (outcome.busy) {
+    // Not a real result: drop the run and let the job try again later.
+    await db.analysisRun.delete({ where: { id: run.id } });
+    await logAnalysisCall(restaurant.id, analyst, outcome, started, "analysis");
+    throw new AiBusyError(outcome.error ?? "The AI analyst is busy.", outcome.busy.retryAfterMs);
+  }
   const aiOffers = outcome.proposals.map((p) => proposalToOffer(p, ctx, outcome.toolLog));
   const findings = outcome.findings.map((f) => ({ title: f.title, detail: f.detail, citations: citationsFor(f.evidence, outcome) }));
   await db.analysisRun.update({
@@ -115,20 +121,7 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
       finishedAt: new Date(),
     },
   });
-  await db.llmCall.create({
-    data: {
-      restaurantId: restaurant.id,
-      provider: analyst.provider,
-      model: analyst.model,
-      purpose: "analysis",
-      outcome: outcome.status === "DONE" ? "ok" : "error",
-      attempts: outcome.turns,
-      inputTokens: outcome.inputTokens,
-      outputTokens: outcome.outputTokens,
-      durationMs: Date.now() - started,
-      error: outcome.error ?? null,
-    },
-  });
+  await logAnalysisCall(restaurant.id, analyst, outcome, started, "analysis");
   if (outcome.status !== "DONE") {
     return { offers: baseline, analysisRunId: run.id, note: `analysis failed (${outcome.error}); used standard ideas` };
   }
@@ -147,6 +140,29 @@ function citationsFor(evidence: AnalysisOutcome["findings"][number]["evidence"],
   });
 }
 
+export async function logAnalysisCall(
+  restaurantId: string,
+  analyst: { provider: string; model: string },
+  outcome: { status: string; turns: number; inputTokens: number; outputTokens: number; error?: string },
+  started: number,
+  purpose: string,
+) {
+  await db.llmCall.create({
+    data: {
+      restaurantId,
+      provider: analyst.provider,
+      model: analyst.model,
+      purpose,
+      outcome: outcome.status === "DONE" ? "ok" : "error",
+      attempts: outcome.turns,
+      inputTokens: outcome.inputTokens,
+      outputTokens: outcome.outputTokens,
+      durationMs: Date.now() - started,
+      error: outcome.error ?? null,
+    },
+  });
+}
+
 export const json = (v: unknown) => JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
 
 export async function draftsToday(restaurantId: string) {
@@ -162,11 +178,12 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
   const { rows, anyConfirmed } = await usableReports(restaurantId);
   if (!anyConfirmed) return "Waiting for confirmed reports.";
 
-  const { offers, analysisRunId, note } = await ideasFor(restaurant, rows);
   const provider = providerFromEnv();
+  if (!provider) return `AI not set up. ${missingAiReason()}`;
+  const { offers, analysisRunId, note } = await ideasFor(restaurant, rows);
   let created = 0;
   let reused = 0;
-  let fellBack = 0;
+  const failed: string[] = [];
 
   for (const offer of offers) {
     const packet = packetFor(restaurant, offer);
@@ -181,7 +198,11 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
 
     const copy = await writeOfferCopy(provider, packet);
     await logCall(restaurantId, copy.log);
-    if (copy.fellBack) fellBack++;
+    if (!copy.ok) {
+      if (copy.retryable) throw new AiBusyError(copy.message, copy.retryAfterMs);
+      failed.push(`${offer.title}: ${copy.message}`);
+      continue;
+    }
 
     // A newer version of the same idea replaces any copy still waiting for review.
     await db.draft.deleteMany({ where: { restaurantId, offerKey: offer.key, status: "PENDING" } });
@@ -205,8 +226,8 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
         checks: offer.checks,
         evidence: (offer.evidence ?? undefined) as Prisma.InputJsonValue | undefined,
         copyLabel: offer.copyLabel,
-        headline: copy.headline,
-        body: copy.body,
+        headline: copy.copy.headline,
+        body: copy.copy.body,
         writtenBy: copy.writtenBy,
         factsHash,
       },
@@ -216,7 +237,7 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
   // Standard ideas the analyst dropped leave the inbox if they were still waiting.
   const keys = offers.map((o) => o.key);
   const removed = await db.draft.deleteMany({ where: { restaurantId, kind: "CUSTOMER_OFFER", status: "PENDING", offerKey: { notIn: keys } } });
-  return `Created ${created}, unchanged ${reused}${removed.count ? `, removed ${removed.count}` : ""}${fellBack ? `, ${fellBack} written from templates after an AI error` : ""}; ${note}.`;
+  return `Created ${created}, unchanged ${reused}${removed.count ? `, removed ${removed.count}` : ""}${failed.length ? `, ${failed.length} not written (${failed.join("; ")})` : ""}; ${note}.`;
 }
 
 /**
@@ -226,7 +247,8 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
  */
 export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFFERS", force = false) {
   const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind, status: "QUEUED" } });
-  if (waiting) return force && !waiting.force ? db.draftJob.update({ where: { id: waiting.id }, data: { force } }) : waiting;
+  // Asking again means "try now", even if the job was waiting for the AI.
+  if (waiting) return db.draftJob.update({ where: { id: waiting.id }, data: { force: waiting.force || force, runAfter: null } });
   return db.draftJob.create({ data: { restaurantId, kind, force } });
 }
 
@@ -242,13 +264,16 @@ export async function processDraftJobs(maxJobs = 20) {
   draining = true;
   try {
     for (let i = 0; i < maxJobs; i++) {
-      const next = await db.draftJob.findFirst({ where: { status: "QUEUED" }, orderBy: { createdAt: "asc" } });
+      const next = await db.draftJob.findFirst({
+        where: { status: "QUEUED", OR: [{ runAfter: null }, { runAfter: { lte: new Date() } }] },
+        orderBy: { createdAt: "asc" },
+      });
       if (!next) return;
       const busy = await db.draftJob.count({ where: { restaurantId: next.restaurantId, status: "RUNNING" } });
       if (busy > 0) return;
       const claimed = await db.draftJob.updateMany({
         where: { id: next.id, status: "QUEUED" },
-        data: { status: "RUNNING", startedAt: new Date() },
+        data: { status: "RUNNING", startedAt: new Date(), attempts: { increment: 1 } },
       });
       if (claimed.count === 0) continue;
       try {
@@ -256,8 +281,12 @@ export async function processDraftJobs(maxJobs = 20) {
           next.kind === "LEADS"
             ? await (await import("@/lib/leads")).scanArea(next.restaurantId, { force: next.force })
             : await buildDraftsFor(next.restaurantId);
-        await db.draftJob.update({ where: { id: next.id }, data: { status: "DONE", message, finishedAt: new Date() } });
+        await db.draftJob.update({ where: { id: next.id }, data: { status: "DONE", message, finishedAt: new Date(), runAfter: null } });
       } catch (err) {
+        if (err instanceof AiBusyError) {
+          await db.draftJob.update({ where: { id: next.id }, data: retryLater(next.attempts + 1, err) });
+          continue;
+        }
         await db.draftJob.update({
           where: { id: next.id },
           data: { status: "FAILED", message: err instanceof Error ? err.message : String(err), finishedAt: new Date() },
@@ -269,10 +298,29 @@ export async function processDraftJobs(maxJobs = 20) {
   }
 }
 
+/** Waits between tries while the AI is busy: 2, 5, 10, 20, 30 and 60 minutes. */
+export const RETRY_MINUTES = [2, 5, 10, 20, 30, 60];
+
+/** The job update after an AI-busy failure: back in the queue with a wait, or failed after the last try. */
+export function retryLater(attempts: number, err: AiBusyError, now = new Date()) {
+  if (attempts > RETRY_MINUTES.length) {
+    return { status: "FAILED" as const, message: `The AI stayed busy after ${attempts} tries: ${err.message}`, finishedAt: now, runAfter: null };
+  }
+  const waitMs = Math.min(24 * 3_600_000, Math.max(RETRY_MINUTES[attempts - 1] * 60_000, err.retryAfterMs ?? 0));
+  // force is cleared so a waiting area scan doesn't search Google again on the retry.
+  return { status: "QUEUED" as const, startedAt: null, force: false, message: `AI busy: ${err.message}`, runAfter: new Date(now.getTime() + waitMs) };
+}
+
 /** Jobs left RUNNING by a crash or restart go back in the queue after 10 minutes. */
 export async function requeueStaleJobs() {
   await db.draftJob.updateMany({
     where: { status: "RUNNING", startedAt: { lt: new Date(Date.now() - 10 * 60_000) } },
     data: { status: "QUEUED", startedAt: null },
   });
+}
+
+/** What a page should show for a restaurant's latest job of one kind. */
+export function jobState(job: { status: string; runAfter: Date | null } | null, now = new Date()): "idle" | "working" | "waiting" {
+  if (!job || (job.status !== "QUEUED" && job.status !== "RUNNING")) return "idle";
+  return job.status === "QUEUED" && job.runAfter && job.runAfter > now ? "waiting" : "working";
 }

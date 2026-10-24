@@ -46,6 +46,19 @@ export interface CopyProvider {
   rewrite?(packet: FactsPacket, current: OfferCopy, instruction: string, signal: AbortSignal): Promise<WriteResult>;
 }
 
+/**
+ * The AI is busy or over its free limit. A job that hits this is put back in
+ * the queue to try again later instead of writing anything without AI.
+ */
+export class AiBusyError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+  }
+}
+
 /** Thrown by providers so the retry loop knows what to do. */
 export class ProviderError extends Error {
   constructor(

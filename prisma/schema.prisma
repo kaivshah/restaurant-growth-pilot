@@ -230,6 +230,10 @@ model DraftJob {
   force        Boolean    @default(false)
   status       JobStatus  @default(QUEUED)
   message      String?
+  /// Tries so far; the AI being busy or over its free limit puts the job back with a wait
+  attempts     Int        @default(0)
+  /// Not before this time (set while waiting for the AI)
+  runAfter     DateTime?
   createdAt    DateTime   @default(now())
   startedAt    DateTime?
   finishedAt   DateTime?

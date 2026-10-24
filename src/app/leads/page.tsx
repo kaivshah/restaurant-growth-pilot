@@ -4,11 +4,12 @@ import { after } from "next/server";
 import { Card, Notice, Pill } from "@/components/ui";
 import { db } from "@/lib/db";
 import { domainOf, isUsefulDomain } from "@/lib/geo";
-import { processDraftJobs, requeueStaleJobs } from "@/lib/drafts";
+import { jobState, processDraftJobs, requeueStaleJobs } from "@/lib/drafts";
 import { mapsUrl } from "@/lib/leads";
 import { LEAD_SKIP_REASONS, categoryLabel } from "@/lib/leads/score";
 import { requireRestaurant } from "@/lib/restaurant";
 import { scanMyArea } from "../inbox/actions";
+import { AiStatus } from "../inbox/ai-status";
 import { AutoRefresh } from "../inbox/auto-refresh";
 import { AppShell } from "../inbox/shell";
 import { addLeadContact, excludeLead, includeLead } from "./actions";
@@ -46,7 +47,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     db.draft.count({ where: { restaurantId: restaurant.id, status: "PENDING" } }),
     db.lead.groupBy({ by: ["category"], where: { restaurantId: restaurant.id, status: { not: "EXCLUDED" } }, _count: true }),
   ]);
-  const working = job?.status === "QUEUED" || job?.status === "RUNNING";
+  const working = jobState(job) === "working";
   const countOf = (cat: string) => counts.find((x) => x.category === cat)?._count ?? 0;
   const href = (next: { c?: string; excluded?: boolean }) => {
     const q = new URLSearchParams();
@@ -58,6 +59,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   return (
     <AppShell current="leads" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       {working && <AutoRefresh />}
+      <AiStatus job={job} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">Leads & events</h1>

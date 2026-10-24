@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ProviderError } from "@/lib/llm";
+import { type GeminiContent, geminiGenerate, replyText, usage } from "@/lib/llm/gemini";
 import { parseRetryAfter } from "@/lib/llm/retry";
 import type { ToolSpec } from "./tools";
 
@@ -185,4 +186,58 @@ function safeJson(s: string): unknown {
   } catch {
     return {};
   }
+}
+
+// ---------- Gemini (free tier via Google AI Studio) ----------
+
+export function geminiAnalyst(apiKey: string, model: string): AnalystModel {
+  return {
+    provider: "gemini",
+    model,
+    start({ system, user, tools }) {
+      const contents: GeminiContent[] = [];
+      const declarations = tools.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.inputSchema }));
+      let n = 0;
+      return {
+        async send(input, signal) {
+          const added: GeminiContent =
+            input === null
+              ? { role: "user", parts: [{ text: user }] }
+              : "nudge" in input
+                ? { role: "user", parts: [{ text: input.nudge }] }
+                : { role: "user", parts: input.map((r) => ({ functionResponse: { ...(r.id.startsWith("gem_") ? {} : { id: r.id }), name: r.name, response: asObject(r.content, r.isError) } })) };
+          contents.push(added);
+          try {
+            const res = await geminiGenerate(
+              apiKey,
+              model,
+              { systemInstruction: { parts: [{ text: system }] }, contents, tools: [{ functionDeclarations: declarations }], generationConfig: { temperature: 0.3 } },
+              signal,
+            );
+            const content = res.candidates?.[0]?.content ?? { role: "model" as const, parts: [] };
+            // Keep the model's turn exactly as returned, including thought signatures.
+            contents.push({ role: "model", parts: content.parts ?? [] });
+            return {
+              toolCalls: (content.parts ?? []).flatMap((p) =>
+                p.functionCall ? [{ id: p.functionCall.id ?? `gem_${++n}`, name: p.functionCall.name, input: p.functionCall.args ?? {} }] : [],
+              ),
+              text: replyText(res),
+              ...usage(res),
+            };
+          } catch (err) {
+            // Drop the turn we just added so a retry resends it cleanly.
+            contents.pop();
+            throw err;
+          }
+        },
+      };
+    },
+  };
+}
+
+/** Gemini wants each tool result as a JSON object. */
+function asObject(content: string, isError?: boolean): Record<string, unknown> {
+  if (isError) return { error: content };
+  const parsed = safeJson(content);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) && Object.keys(parsed).length ? (parsed as Record<string, unknown>) : { result: content };
 }

@@ -5,7 +5,7 @@ import type { ToolLog } from "@/lib/analyst/verify";
 import { fromHunterDomainSearch, rankContacts } from "@/lib/contacts";
 import { type LocalEvent, fromPredictHq, fromTicketmaster } from "@/lib/events";
 import { domainOf, isUsefulDomain, milesBetween } from "@/lib/geo";
-import { templateProvider, validateCopy } from "@/lib/llm";
+import { validateCopy } from "@/lib/llm";
 import { type Place, fromGooglePlace } from "@/lib/places";
 import { scoreEvent, scoreLead } from "./score";
 
@@ -281,12 +281,13 @@ describe("pitch email copy", () => {
     },
   };
 
-  it("writes a template pitch that passes the copy checks", async () => {
-    const copy = await templateProvider.write(packet, new AbortController().signal);
-    expect(copy.body).toMatch(/^Hi Jo,/);
-    expect(copy.body).toContain("independently owned and operated");
-    expect(copy.body).toContain("10 or more people");
+  it("accepts a pitch that sticks to the facts", () => {
+    const copy = {
+      headline: "Team lunch for Northwind Labs? A cookie platter on us",
+      body: "Hi Jo,\n\nI run Subway #00000, 0.8 mi from you. For your first catering order of 10 or more people, a cookie platter is on us.\n\nThe team at Subway #00000\nSubway #00000 is independently owned and operated.",
+    };
     expect(validateCopy(copy, packet)).toEqual([]);
+    expect(validateCopy({ ...copy, body: `${copy.body} Save 20% today.` }, packet).join(" ")).toMatch(/20%/);
   });
 
   it("requires a franchise pitch to say it's independently owned", () => {

@@ -50,7 +50,7 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
         <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">{leadsRun ? "How the AI chose who to pitch" : "How the AI decided"}</h1>
         <p className="text-ink-2">
           Analysis of {when} · {run.provider === "fake" ? "scripted test analyst" : `${run.provider} ${run.model}`} · {run.toolCalls} data lookups
-          {run.estimatedCostUsd != null ? ` · about $${run.estimatedCostUsd.toFixed(4)}` : ""}
+          {run.estimatedCostUsd != null ? ` · about $${run.estimatedCostUsd.toFixed(4)}` : run.provider === "gemini" ? " · free tier" : ""}
         </p>
       </div>
 

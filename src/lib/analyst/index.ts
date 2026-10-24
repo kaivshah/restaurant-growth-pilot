@@ -2,7 +2,7 @@ import type { OfferCandidate } from "@/lib/offers";
 import type { AnalystContext } from "./context";
 import { fakeAnalyst } from "./fake";
 import { fakeLeadAnalyst } from "./leads/fake";
-import { type AnalystModel, claudeAnalyst, ollamaAnalyst } from "./models";
+import { type AnalystModel, claudeAnalyst, geminiAnalyst, ollamaAnalyst } from "./models";
 import type { AnalysisOutcome } from "./run";
 import { similar } from "./verify";
 
@@ -16,18 +16,25 @@ export { proposalToOffer, citations } from "./to-offer";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /**
- * The analyst chosen by ANALYST_PROVIDER, or null when it's off (rule ideas
- * only). The purpose only matters for the scripted fake.
+ * The analyst chosen by ANALYST_PROVIDER (gemini by default), or null when
+ * it's off or its key is missing (rule ideas only). The purpose only matters
+ * for the scripted fake.
  */
 export function analystFromEnv(purpose: "offers" | "leads" = "offers", env: NodeJS.ProcessEnv = process.env): AnalystModel | null {
-  const choice = (env.ANALYST_PROVIDER ?? "off").toLowerCase();
+  const choice = (env.ANALYST_PROVIDER || "gemini").toLowerCase();
+  if (choice === "gemini") {
+    if (!env.GEMINI_API_KEY) return null;
+    // An ANALYST_MODEL left over for another provider (e.g. claude-…) is ignored.
+    const model = env.ANALYST_MODEL?.startsWith("gemini") ? env.ANALYST_MODEL : env.GEMINI_MODEL || "gemini-2.5-flash";
+    return geminiAnalyst(env.GEMINI_API_KEY, model);
+  }
   if (choice === "anthropic") {
     if (!env.ANTHROPIC_API_KEY) {
       console.warn("ANALYST_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set; the analyst is off.");
       return null;
     }
     const effort = EFFORTS.find((e) => e === env.ANALYST_EFFORT);
-    return claudeAnalyst(env.ANTHROPIC_API_KEY, env.ANALYST_MODEL || "claude-opus-5-5", effort);
+    return claudeAnalyst(env.ANTHROPIC_API_KEY, env.ANALYST_MODEL?.startsWith("claude") ? env.ANALYST_MODEL : "claude-opus-5-5", effort);
   }
   if (choice === "ollama") {
     return ollamaAnalyst(env.OLLAMA_URL || "http://localhost:11434", env.ANALYST_MODEL || env.OLLAMA_MODEL || "qwen2.5:7b-instruct");

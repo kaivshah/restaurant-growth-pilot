@@ -3,8 +3,9 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4";
 import { SYSTEM_PROMPT, rewriteRequest, writeRequest } from "./prompt";
 import { parseRetryAfter } from "./retry";
-import { type CopyProvider, type FactsPacket, type OfferCopy, ProviderError, type WriteResult } from "./types";
-import { INDEPENDENT_LINE, LIMITS } from "./validate";
+import { type CopyProvider, ProviderError, type WriteResult } from "./types";
+import { geminiGenerate, replyText, usage } from "./gemini";
+import { LIMITS } from "./validate";
 
 const CopySchema = z.object({
   headline: z.string(),
@@ -21,71 +22,33 @@ const copyJsonSchema = {
   additionalProperties: false,
 } as const;
 
-// ---------- Templates: free, offline, always available ----------
+// ---------- Gemini (Google AI Studio; has a free tier) ----------
 
-function templatePitch(packet: FactsPacket): OfferCopy {
-  const p = packet.pitch!;
-  const name = packet.restaurant.name;
-  const what = `${p.occasion.charAt(0).toLowerCase()}${p.occasion.slice(1)}${p.event ? ` on ${p.event.date}` : ""}`;
-  const lines = [
-    `Hi ${p.contactFirstName ?? "there"},`,
-    "",
-    `I run ${name}, just ${p.distanceMiles} mi from ${p.company}. If you're planning ${what}, we'd love to help: sub platters, wraps and salads, delivered and set up on time.`,
-    "",
-    `To say hello, ${p.offer} is on us with your first catering order for ${p.minOrder} or more people.`,
-    "",
-    "Just reply with a date and headcount and I'll send over a menu and a quote.",
-    "",
-    "Thanks,",
-    `The team at ${name}`,
-  ];
-  if (packet.restaurant.kind === "FRANCHISE") lines.push("", `${name} is ${INDEPENDENT_LINE}.`);
-  const subject = p.event ? `Lunch for ${p.event.title}?` : `Team lunch for ${p.company}? ${p.offer.replace(/^a /, "A ")} on us`;
-  return { headline: subject.slice(0, LIMITS.headline), body: lines.join("\n") };
-}
-
-function templateCopy(packet: FactsPacket): OfferCopy {
-  if (packet.pitch) return templatePitch(packet);
-  const name = packet.restaurant.name;
-  switch (packet.offer.key) {
-    case "welcome":
-      return {
-        headline: "Scan to join. Your next cookie is on us.",
-        body: `Join the ${name} email list for local deals from your neighbourhood shop. We'll email your free cookie code right away. One per customer; unsubscribe any time.`,
-      };
-    case "afternoon-drink": {
-      const deal = packet.offer.title.replace(/, 3–5 pm$/, "");
-      return {
-        headline: `Afternoon pick-me-up: ${deal.charAt(0).toLowerCase()}${deal.slice(1)}`,
-        body: `Beat the 3 pm slump at ${name}. Any weekday from 3 to 5 pm: ${deal.charAt(0).toLowerCase()}${deal.slice(1)}. Show code [CODE] at the counter. Valid for the next 4 weeks.`,
-      };
-    }
-    case "weekend-bread":
-      return {
-        headline: "This weekend: free chips with any 6-inch sub",
-        body: `Saturday to Monday at ${name}, get free chips with any 6-inch sub. Show code [CODE] at the counter. Valid for the next 2 weeks.`,
-      };
-    default: {
-      // AI-suggested offers: first fact is the title; the rest are when, how long and conditions.
-      const [title, when, ...rest] = packet.facts.filter((f) => f !== "Show the code at the counter");
-      const valid = rest.find((f) => f.startsWith("Valid for"));
-      const code = packet.rules.codePlaceholder ? ` Show code ${packet.rules.codePlaceholder} at the counter.` : "";
-      const offer = (title ?? packet.offer.title).replace(/,[^,]*$/, ""); // drop the time, it's in `when`
-      return {
-        headline: packet.offer.title,
-        body: `${offer} at ${name}${when ? `, ${when}` : ""}.${code}${valid ? ` ${valid.replace("Valid for", "Valid for the next")}.` : ""}`,
-      };
-    }
+export function geminiProvider(apiKey: string, model: string): CopyProvider {
+  async function call(user: string, signal: AbortSignal): Promise<WriteResult> {
+    const res = await geminiGenerate(
+      apiKey,
+      model,
+      {
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ role: "user", parts: [{ text: user }] }],
+        generationConfig: { responseMimeType: "application/json", responseJsonSchema: copyJsonSchema, temperature: 0.7 },
+      },
+      signal,
+    );
+    const finish = res.candidates?.[0]?.finishReason;
+    if (finish === "SAFETY" || finish === "PROHIBITED_CONTENT") throw new ProviderError("Gemini declined to write this", false);
+    const parsed = CopySchema.safeParse(safeJson(replyText(res)));
+    if (!parsed.success) throw new ProviderError("Gemini returned copy we couldn't read", true);
+    return { ...parsed.data, ...usage(res) };
   }
+  return {
+    name: "gemini",
+    model,
+    write: (packet, signal) => call(writeRequest(packet), signal),
+    rewrite: (packet, current, instruction, signal) => call(rewriteRequest(packet, current, instruction), signal),
+  };
 }
-
-export const templateProvider: CopyProvider = {
-  name: "template",
-  model: "built-in",
-  async write(packet) {
-    return templateCopy(packet);
-  },
-};
 
 // ---------- Claude (Anthropic) ----------
 
@@ -191,17 +154,30 @@ function safeJson(text: string | undefined): unknown {
 
 // ---------- Choosing a provider from the environment ----------
 
-export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): CopyProvider {
-  const choice = (env.LLM_PROVIDER ?? "template").toLowerCase();
+/**
+ * The copywriter chosen by LLM_PROVIDER (gemini by default), or null when its
+ * key is missing. Without a provider no drafts are written.
+ */
+export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): CopyProvider | null {
+  const choice = (env.LLM_PROVIDER || "gemini").toLowerCase();
   if (choice === "anthropic") {
-    if (!env.ANTHROPIC_API_KEY) {
-      console.warn("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set; using templates.");
-      return templateProvider;
-    }
+    if (!env.ANTHROPIC_API_KEY) return null;
     return anthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODEL || "claude-haiku-5-5");
   }
   if (choice === "ollama") {
     return ollamaProvider(env.OLLAMA_URL || "http://localhost:11434", env.OLLAMA_MODEL || "qwen2.5:7b-instruct");
   }
-  return templateProvider;
+  if (choice === "gemini") {
+    if (!env.GEMINI_API_KEY) return null;
+    return geminiProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL || "gemini-2.5-flash");
+  }
+  return null;
+}
+
+/** Why there's no copywriter, for the setup notice. */
+export function missingAiReason(env: NodeJS.ProcessEnv = process.env): string {
+  const choice = (env.LLM_PROVIDER || "gemini").toLowerCase();
+  if (choice === "anthropic") return "LLM_PROVIDER is anthropic but ANTHROPIC_API_KEY is empty.";
+  if (choice === "gemini") return "Add a free Gemini key as GEMINI_API_KEY in .env (from aistudio.google.com), then restart the app.";
+  return `LLM_PROVIDER="${choice}" isn't supported. Use gemini, anthropic or ollama.`;
 }

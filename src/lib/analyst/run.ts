@@ -18,6 +18,7 @@ export interface Rejected {
 export interface AnalysisOutcome {
   status: "DONE" | "FAILED";
   error?: string;
+  busy?: { retryAfterMs?: number };
   findings: Finding[];
   proposals: Proposal[];
   rejected: Rejected[];
@@ -56,6 +57,7 @@ export async function runAnalysis(
   const out: AnalysisOutcome = {
     status: "FAILED",
     error: res.error,
+    busy: res.busy,
     findings: [],
     proposals: [],
     rejected: [],

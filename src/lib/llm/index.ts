@@ -1,10 +1,9 @@
-import { templateProvider } from "./providers";
 import { Semaphore, type RetryOptions, withRetry } from "./retry";
-import { type CopyProvider, type FactsPacket, type OfferCopy, ProviderError } from "./types";
+import { type CopyProvider, type FactsPacket, type OfferCopy, ProviderError, type WriteResult } from "./types";
 import { validateCopy } from "./validate";
 
 export * from "./types";
-export { providerFromEnv, templateProvider } from "./providers";
+export { missingAiReason, providerFromEnv } from "./providers";
 export { validateCopy } from "./validate";
 
 /** At most two LLM calls at a time from this server, so bursts can't flood a provider. */
@@ -22,56 +21,54 @@ export interface CallLog {
   error?: string;
 }
 
-export interface WriteOutcome extends OfferCopy {
-  writtenBy: string;
-  /** Set when the chosen provider failed and templates were used instead */
-  fellBack: boolean;
-  log: CallLog | null;
-}
+export type WriteOutcome =
+  | { ok: true; copy: OfferCopy; writtenBy: string; log: CallLog }
+  | { ok: false; retryable: boolean; retryAfterMs?: number; message: string; log: CallLog };
 
 /**
- * Writes copy for one offer. Uses the configured provider with retries and a
- * timeout; if it fails or returns copy that breaks the rules, falls back to
- * the built-in template so the owner always gets a draft.
+ * Writes copy for one offer with the configured AI provider, with retries and
+ * a timeout. Copy that breaks a rule gets one chance to be fixed; there is no
+ * pre-written fallback, so a failure is reported and the job tries later.
  */
-export async function writeOfferCopy(
-  provider: CopyProvider,
-  packet: FactsPacket,
-  retry?: RetryOptions,
-): Promise<WriteOutcome> {
-  const fallback = async (log: CallLog | null): Promise<WriteOutcome> => ({
-    ...(await templateProvider.write(packet, new AbortController().signal)),
-    writtenBy: "template",
-    fellBack: provider !== templateProvider,
-    log,
-  });
-  if (provider === templateProvider) return fallback(null);
-
+export async function writeOfferCopy(provider: CopyProvider, packet: FactsPacket, retry?: RetryOptions): Promise<WriteOutcome> {
   const started = Date.now();
   const base = { provider: provider.name, model: provider.model, purpose: "write" as const };
+  let attempts = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const call = async (fn: (signal: AbortSignal) => Promise<WriteResult>) => {
+    const r = await limiter.run(() => withRetry(fn, retry));
+    attempts += r.attempts;
+    inputTokens += r.value.inputTokens ?? 0;
+    outputTokens += r.value.outputTokens ?? 0;
+    return r.value;
+  };
+  const log = (outcome: CallLog["outcome"], error?: string): CallLog => ({ ...base, outcome, attempts, inputTokens, outputTokens, durationMs: Date.now() - started, error });
+
   try {
-    const { value, attempts } = await limiter.run(() => withRetry((signal) => provider.write(packet, signal), retry));
-    const durationMs = Date.now() - started;
-    const tokens = { inputTokens: value.inputTokens, outputTokens: value.outputTokens };
-    const problems = validateCopy(value, packet);
+    let value = await call((signal) => provider.write(packet, signal));
+    let problems = validateCopy(value, packet);
+    if (problems.length > 0 && provider.rewrite) {
+      const broken = value;
+      value = await call((signal) => provider.rewrite!(packet, broken, `Fix these problems and change nothing else: ${problems.join(" ")}`, signal));
+      problems = validateCopy(value, packet);
+    }
     if (problems.length > 0) {
-      return fallback({ ...base, ...tokens, outcome: "invalid-output", attempts, durationMs, error: problems.join(" ") });
+      return { ok: false, retryable: false, message: `The AI's copy broke a rule: ${problems[0]}`, log: log("invalid-output", problems.join(" ")) };
     }
     return {
-      headline: value.headline.trim(),
-      body: value.body.trim(),
+      ok: true,
+      copy: { headline: value.headline.trim(), body: value.body.trim() },
       writtenBy: `${provider.name}:${provider.model}`,
-      fellBack: false,
-      log: { ...base, ...tokens, outcome: attempts > 1 ? "retried-ok" : "ok", attempts, durationMs },
+      log: log(attempts > 1 ? "retried-ok" : "ok"),
     };
   } catch (err) {
-    return fallback({
-      ...base,
-      outcome: "error",
-      attempts: (retry?.retries ?? 3) + 1,
-      durationMs: Date.now() - started,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    const message = err instanceof Error ? err.message : String(err);
+    attempts = Math.max(attempts, (retry?.retries ?? 3) + 1);
+    // Timeouts and rate limits fix themselves; a bad key or a refusal doesn't.
+    const retryable = !(err instanceof ProviderError) || err.retryable;
+    const retryAfterMs = err instanceof ProviderError ? err.retryAfterMs : undefined;
+    return { ok: false, retryable, retryAfterMs, message, log: log("error", message) };
   }
 }
 
@@ -88,7 +85,7 @@ export async function rewriteOfferCopy(
   retry?: RetryOptions,
 ): Promise<RewriteOutcome> {
   if (!provider.rewrite) {
-    return { ok: false, message: "AI rewriting needs an AI model. Set LLM_PROVIDER to ollama or anthropic.", log: null };
+    return { ok: false, message: "This AI provider can't rewrite drafts.", log: null };
   }
   const started = Date.now();
   const base = { provider: provider.name, model: provider.model, purpose: "rewrite" as const };

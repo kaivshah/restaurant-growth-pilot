@@ -44,6 +44,8 @@ export async function withRetry<T>(
       }
       const backoff = base * 2 ** (attempt - 1) * (0.75 + random() * 0.5);
       const hinted = err instanceof ProviderError ? err.retryAfterMs : undefined;
+      // A provider asking for a long wait (e.g. a daily quota) won't recover in this call.
+      if (hinted !== undefined && hinted > maxDelay) throw err;
       const wait = Math.min(maxDelay, Math.max(backoff, hinted ?? 0));
       await sleep(wait);
     } finally {
