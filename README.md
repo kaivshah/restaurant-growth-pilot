@@ -22,6 +22,8 @@ Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 
 **Privacy:** on the free tier, Google may use what's sent to improve its models: the store's sales totals and offer facts, and in pitches the business name and the contact's first name. No customer data is sent. For production, use Claude or a paid Gemini project.
 
+**Checking the AI setup:** `npm run ai:check` sends one email-draft request and one tool call (like the analyst makes) using your `.env`, and prints which model answered and how long it took. The server terminal also prints every Gemini request: `[gemini] … answered in 4.2s`, waits for the free limit, and errors.
+
 **Switching to Claude:** set `LLM_PROVIDER="anthropic"`, `ANALYST_PROVIDER="anthropic"` and `ANTHROPIC_API_KEY`, then restart.
 
 ### Milestone 3a: catering leads and pitches (sending comes in 3b)

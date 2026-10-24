@@ -107,19 +107,45 @@ export function geminiInterval(env: NodeJS.ProcessEnv = process.env) {
 async function waitForSlot(signal: AbortSignal) {
   const now = Date.now();
   const at = Math.max(now, nextSlot);
-  nextSlot = at + geminiInterval();
+  const interval = geminiInterval();
+  nextSlot = at + interval;
   if (at <= now) return;
+  const waitMs = at - now;
+  if (waitMs > 1500) console.log(`[gemini] waiting ${Math.round(waitMs / 1000)}s for the free per-minute limit (GEMINI_RPM=${Math.round(60_000 / interval)})`);
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, at - now);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(new Error("aborted"));
-    }, { once: true });
+    const timer = setTimeout(resolve, waitMs);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        // Give the unused turn back, so waits don't pile up after timeouts.
+        nextSlot = Math.max(Date.now(), nextSlot - interval);
+        reject(new Error("aborted"));
+      },
+      { once: true },
+    );
   });
 }
 
 async function generateWith(apiKey: string, model: string, req: GeminiRequest, signal: AbortSignal): Promise<GeminiResponse> {
   await waitForSlot(signal);
+  const started = Date.now();
+  // Thinking models can take a while; say so in the terminal instead of going quiet.
+  const slow = setInterval(() => console.log(`[gemini] ${model} still answering after ${Math.round((Date.now() - started) / 1000)}s…`), 20_000);
+  signal.addEventListener("abort", () => clearInterval(slow), { once: true });
+  try {
+    const out = await requestOnce(apiKey, model, req, signal);
+    console.log(`[gemini] ${model} answered in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    return out;
+  } catch (err) {
+    console.log(`[gemini] ${model} ${signal.aborted ? `gave no answer within the time limit (${Math.round((Date.now() - started) / 1000)}s)` : `failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`}`);
+    throw err;
+  } finally {
+    clearInterval(slow);
+  }
+}
+
+async function requestOnce(apiKey: string, model: string, req: GeminiRequest, signal: AbortSignal): Promise<GeminiResponse> {
   const send = (body: GeminiRequest) =>
     fetch(`${base()}/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
@@ -143,7 +169,8 @@ async function generateWith(apiKey: string, model: string, req: GeminiRequest, s
   const body = safeJson(await res.text());
   if (!res.ok) {
     const err = geminiError(res.status, body);
-    if (err instanceof ProviderError && err.retryAfterMs) nextSlot = Math.max(nextSlot, Date.now() + err.retryAfterMs);
+    // Honour Google's "retry in Ns" for the next request, up to a minute; longer waits make the job retry later.
+    if (err instanceof ProviderError && err.retryAfterMs) nextSlot = Math.max(nextSlot, Date.now() + Math.min(err.retryAfterMs, 60_000));
     throw err;
   }
   const out = body as GeminiResponse;

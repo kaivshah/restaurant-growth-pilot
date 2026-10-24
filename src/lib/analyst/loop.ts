@@ -75,9 +75,10 @@ export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, 
     let turn;
     try {
       const current = input;
-      ({ value: turn } = await withRetry((signal) => session.send(current, signal), { timeoutMs: 120_000, ...limits.retry }));
+      ({ value: turn } = await withRetry((signal) => session.send(current, signal), { timeoutMs: 120_000, retries: 2, ...limits.retry }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      console.log(`[analyst] stopped at step ${out.turns}: ${message.slice(0, 200)}`);
       if (err instanceof AiConfigError) return { ...fail(message), fatal: true };
       const busy = !(err instanceof ProviderError) || err.retryable ? { retryAfterMs: err instanceof ProviderError ? err.retryAfterMs : undefined } : undefined;
       return { ...fail(message), busy };
