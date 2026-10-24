@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ProviderError } from "@/lib/llm";
-import { type GeminiContent, geminiGenerate, replyText, usage } from "@/lib/llm/gemini";
+import { type GeminiContent, geminiGenerate, replyText, resolvedModel, usage } from "@/lib/llm/gemini";
 import { parseRetryAfter } from "@/lib/llm/retry";
 import type { ToolSpec } from "./tools";
 
@@ -193,7 +193,9 @@ function safeJson(s: string): unknown {
 export function geminiAnalyst(apiKey: string, model: string): AnalystModel {
   return {
     provider: "gemini",
-    model,
+    get model() {
+      return resolvedModel(model);
+    },
     start({ system, user, tools }) {
       const contents: GeminiContent[] = [];
       const declarations = tools.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.inputSchema }));

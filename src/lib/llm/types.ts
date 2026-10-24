@@ -47,6 +47,12 @@ export interface CopyProvider {
 }
 
 /**
+ * The AI provider rejected the setup itself (bad key, unknown model, no
+ * access). Every further call would fail the same way, so jobs stop at once.
+ */
+export class AiConfigError extends Error {}
+
+/**
  * The AI is busy or over its free limit. A job that hits this is put back in
  * the queue to try again later instead of writing anything without AI.
  */

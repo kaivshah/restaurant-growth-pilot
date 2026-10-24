@@ -4,7 +4,7 @@ import { analystFromEnv, buildContext, estimateCostUsd, mergeIdeas, proposalToOf
 import type { AnalysisOutcome, AnalystContext } from "@/lib/analyst";
 import { db } from "@/lib/db";
 import { computeInsights } from "@/lib/insights";
-import { AiBusyError, type FactsPacket, type CallLog, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
+import { AiBusyError, AiConfigError, type FactsPacket, type CallLog, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
 import { type OfferCandidate, buildOffers, isBrandSafe } from "@/lib/offers";
 import type { ParsedReport } from "@/lib/reports";
 
@@ -96,6 +96,11 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
   const started = Date.now();
   // Ideas the owner already decided on shouldn't come back under a new name.
   const outcome = await runAnalysis(analyst, ctx, baseline, decisions.map((d) => d.title));
+  if (outcome.fatal) {
+    await db.analysisRun.update({ where: { id: run.id }, data: { status: "FAILED", error: outcome.error ?? null, model: analyst.model, finishedAt: new Date() } });
+    await logAnalysisCall(restaurant.id, analyst, outcome, started, "analysis");
+    throw new AiConfigError(outcome.error ?? "The AI provider rejected the request.");
+  }
   if (outcome.busy) {
     // Not a real result: drop the run and let the job try again later.
     await db.analysisRun.delete({ where: { id: run.id } });
@@ -108,6 +113,7 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
     where: { id: run.id },
     data: {
       status: outcome.status,
+      model: analyst.model,
       error: outcome.error ?? null,
       findings: json(findings),
       accepted: json({ offers: aiOffers, proposals: outcome.proposals }),
@@ -199,6 +205,7 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
     const copy = await writeOfferCopy(provider, packet);
     await logCall(restaurantId, copy.log);
     if (!copy.ok) {
+      if (copy.fatal) throw new AiConfigError(copy.message);
       if (copy.retryable) throw new AiBusyError(copy.message, copy.retryAfterMs);
       failed.push(`${offer.title}: ${copy.message}`);
       continue;

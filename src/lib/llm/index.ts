@@ -1,5 +1,5 @@
 import { Semaphore, type RetryOptions, withRetry } from "./retry";
-import { type CopyProvider, type FactsPacket, type OfferCopy, ProviderError, type WriteResult } from "./types";
+import { AiConfigError, type CopyProvider, type FactsPacket, type OfferCopy, ProviderError, type WriteResult } from "./types";
 import { validateCopy } from "./validate";
 
 export * from "./types";
@@ -23,7 +23,7 @@ export interface CallLog {
 
 export type WriteOutcome =
   | { ok: true; copy: OfferCopy; writtenBy: string; log: CallLog }
-  | { ok: false; retryable: boolean; retryAfterMs?: number; message: string; log: CallLog };
+  | { ok: false; retryable: boolean; retryAfterMs?: number; message: string; log: CallLog; fatal?: boolean };
 
 /**
  * Writes copy for one offer with the configured AI provider, with retries and
@@ -43,7 +43,7 @@ export async function writeOfferCopy(provider: CopyProvider, packet: FactsPacket
     outputTokens += r.value.outputTokens ?? 0;
     return r.value;
   };
-  const log = (outcome: CallLog["outcome"], error?: string): CallLog => ({ ...base, outcome, attempts, inputTokens, outputTokens, durationMs: Date.now() - started, error });
+  const log = (outcome: CallLog["outcome"], error?: string): CallLog => ({ ...base, model: provider.model, outcome, attempts, inputTokens, outputTokens, durationMs: Date.now() - started, error });
 
   try {
     let value = await call((signal) => provider.write(packet, signal));
@@ -64,6 +64,8 @@ export async function writeOfferCopy(provider: CopyProvider, packet: FactsPacket
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // A bad key or retired model: every other draft would fail the same way.
+    if (err instanceof AiConfigError) return { ok: false, retryable: false, fatal: true, message, log: log("error", message) };
     attempts = Math.max(attempts, (retry?.retries ?? 3) + 1);
     // Timeouts and rate limits fix themselves; a bad key or a refusal doesn't.
     const retryable = !(err instanceof ProviderError) || err.retryable;
@@ -93,7 +95,7 @@ export async function rewriteOfferCopy(
     const { value, attempts } = await limiter.run(() =>
       withRetry((signal) => provider.rewrite!(packet, current, instruction, signal), retry),
     );
-    const log = { ...base, attempts, durationMs: Date.now() - started, inputTokens: value.inputTokens, outputTokens: value.outputTokens };
+    const log = { ...base, model: provider.model, attempts, durationMs: Date.now() - started, inputTokens: value.inputTokens, outputTokens: value.outputTokens };
     const problems = validateCopy(value, packet);
     if (problems.length > 0) {
       return { ok: false, message: `The rewrite broke a rule, so we kept your draft. ${problems[0]}`, log: { ...log, outcome: "invalid-output", error: problems.join(" ") } };
@@ -105,7 +107,7 @@ export async function rewriteOfferCopy(
       log: { ...log, outcome: attempts > 1 ? "retried-ok" : "ok" },
     };
   } catch (err) {
-    const message = err instanceof ProviderError ? err.message : "The AI model didn't respond.";
+    const message = err instanceof ProviderError || err instanceof AiConfigError ? err.message : "The AI model didn't respond.";
     return {
       ok: false,
       message: `${message} Your draft is unchanged; try again in a minute.`,

@@ -11,7 +11,7 @@ Name not decided yet, so the app calls itself **product**.
 Everything is written and decided by a real AI model; there are no pre-written drafts. One free **Gemini** key runs both the copywriter and the AI analyst:
 
 1. Go to [Google AI Studio](https://aistudio.google.com), click **Get API key → Create API key** (no card needed).
-2. Put it in `.env` as `GEMINI_API_KEY`. `LLM_PROVIDER` and `ANALYST_PROVIDER` already default to `gemini`; `GEMINI_MODEL` defaults to `gemini-2.5-flash`.
+2. Put it in `.env` as `GEMINI_API_KEY`. `LLM_PROVIDER` and `ANALYST_PROVIDER` already default to `gemini`; `GEMINI_MODEL` defaults to `gemini-flash-latest` (Google's current Flash). Google retires model names for new keys from time to time; when that happens the app switches to the model Google suggests and logs a warning.
 3. Restart `npm run dev`.
 
 Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
@@ -43,6 +43,8 @@ The **Catering** tab in the Approval Inbox shows each pitch with its fit score, 
 | Hunter.io | `HUNTER_API_KEY`, `CONTACTS_PROVIDER=hunter` | The free plan has 50 credits a month. Each scan uses at most `HUNTER_MAX_LOOKUPS` searches (2 for the trial), each plus one email check, and a domain isn't searched again for 30 days. |
 | PredictHQ | `PREDICTHQ_API_KEY`, `PREDICTHQ_LOCATION_ID` | Best source for conferences and expos with attendance. The free plan searches saved locations only. |
 | Ticketmaster Discovery | `TICKETMASTER_API_KEY` | Free, 5,000 calls a day. Ticketed games and concerts. |
+
+A bad AI key or model stops the scan at the first draft with one clear message. Businesses from a different source (for example sample data from a `fake` test run) are removed on the next real scan, unless their pitch was approved. Events only appear when `TICKETMASTER_API_KEY` or `PREDICTHQ_API_KEY` is set.
 
 Google's terms limit storing Place content, so businesses nobody acted on are removed after 30 days and refreshed on every scan. A rules change re-picks pitches from the last scan if it's under a day old; **Scan my area** always searches again. The City of San Diego special-events permit data was last updated in 2021, so it isn't used.
 
@@ -103,7 +105,7 @@ The owner can approve, edit, skip (with a reason), undo, or ask the AI to rewrit
 
 | Value | Cost | Notes |
 |---|---|---|
-| `gemini` (default) | Free tier | Set `GEMINI_API_KEY`; `GEMINI_MODEL` defaults to `gemini-2.5-flash` |
+| `gemini` (default) | Free tier | Set `GEMINI_API_KEY`; `GEMINI_MODEL` defaults to `gemini-flash-latest` |
 | `ollama` | Free, runs on your computer | Install [Ollama](https://ollama.com), run `ollama pull qwen2.5:7b-instruct`, set `OLLAMA_MODEL`. Any instruct model works (Llama 3.1 8B, Mistral 7B…) |
 | `anthropic` | About $0.0004 per draft with Claude Haiku 5.5 | Set `ANTHROPIC_API_KEY`; `ANTHROPIC_MODEL` defaults to `claude-haiku-5-5` |
 

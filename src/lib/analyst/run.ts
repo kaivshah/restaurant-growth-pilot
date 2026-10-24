@@ -19,6 +19,7 @@ export interface AnalysisOutcome {
   status: "DONE" | "FAILED";
   error?: string;
   busy?: { retryAfterMs?: number };
+  fatal?: boolean;
   findings: Finding[];
   proposals: Proposal[];
   rejected: Rejected[];
@@ -58,6 +59,7 @@ export async function runAnalysis(
     status: "FAILED",
     error: res.error,
     busy: res.busy,
+    fatal: res.fatal,
     findings: [],
     proposals: [],
     rejected: [],

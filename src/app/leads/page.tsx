@@ -77,16 +77,30 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       </div>
 
       {scan?.status === "FAILED" && !working && (
-        <Notice tone="danger" title="The last scan didn't finish.">
+        <Notice tone="danger" title={scan.leadsFound ? `Found ${scan.leadsFound} businesses, but no pitches were written.` : "The last scan didn't finish."}>
           {scan.message}
         </Notice>
       )}
-      {scan?.status === "DONE" && (
-        <p className="text-sm text-muted">
-          Last scan {scan.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" })} · places from{" "}
-          {scan.placesProvider === "fake" ? "sample data" : "Google"} · contacts from {scan.contactsProvider === "off" ? "nowhere (lookup is off)" : scan.contactsProvider === "fake" ? "sample data" : "Hunter.io"}
-          {scan.message ? ` · ${scan.message}` : ""}
-        </p>
+      {scan && (
+        <div className="flex flex-col gap-1 text-sm text-muted">
+          <p>
+            Last scan {scan.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" })} · places from{" "}
+            {scan.placesProvider === "fake" ? "sample data" : "Google"} · contacts from {scan.contactsProvider === "off" ? "nowhere (lookup is off)" : scan.contactsProvider === "fake" ? "sample data" : "Hunter.io"} ·{" "}
+            {scan.leadsFound} businesses, {scan.contactsFound} new contacts, {scan.eventsFound} events
+            {scan.status === "DONE" ? `, ${scan.pitchesDrafted} pitches drafted` : ""}
+            {scan.eventsProvider === "off" ? " · event search is off (add TICKETMASTER_API_KEY or PREDICTHQ_API_KEY)" : ""}
+          </p>
+          {scan.status === "DONE" && scan.message && (
+            <details>
+              <summary className="cursor-pointer font-semibold">Scan details</summary>
+              <ul className="mt-1 list-disc pl-5">
+                {scan.message.split(/; |, (?=drafted|AI picked|\d+ more|couldn't|removed|stopped|reused|chose|contact)/).map((part, i) => (
+                  <li key={i}>{part}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
       )}
 
       <section aria-labelledby="events-h" className="flex flex-col gap-3">

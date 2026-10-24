@@ -1,4 +1,4 @@
-import { ProviderError } from "./types";
+import { AiConfigError, ProviderError } from "./types";
 
 /**
  * Minimal client for the Gemini API (generateContent). Free keys come from
@@ -24,7 +24,7 @@ export type GeminiResponse = {
 const base = () => (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
 
 /** Turns a Gemini error reply into a ProviderError the retry loop understands. */
-export function geminiError(status: number, body: unknown): ProviderError {
+export function geminiError(status: number, body: unknown): ProviderError | AiConfigError {
   const err = (body as { error?: { message?: string; status?: string; details?: { "@type"?: string; retryDelay?: string }[] } })?.error;
   const message = err?.message?.slice(0, 300) ?? `HTTP ${status}`;
   if (status === 429 || status >= 500) {
@@ -33,8 +33,28 @@ export function geminiError(status: number, body: unknown): ProviderError {
     const busy = status === 429 ? "Gemini free limit reached" : `Gemini unavailable (${status})`;
     return new ProviderError(`${busy}: ${message}`, true, Number.isFinite(seconds) ? seconds * 1000 : undefined);
   }
-  if (status === 401 || status === 403 || /API key/i.test(message)) return new ProviderError("Gemini API key is missing or invalid", false);
+  if (status === 401 || status === 403 || /API key/i.test(message)) return new AiConfigError("Gemini API key is missing or invalid. Check GEMINI_API_KEY in .env.");
+  if (status === 404 || err?.status === "NOT_FOUND") return new AiConfigError(`Gemini model not available: ${message.slice(0, 160)}`);
   return new ProviderError(`Gemini error ${status}: ${message}`, false);
+}
+
+/** Google's alias for its current Flash model. */
+export const LATEST_FLASH = "gemini-flash-latest";
+
+/** Models that turned out to be retired, mapped to the one that worked instead. */
+const replaced = new Map<string, string>();
+
+/** The model actually in use for a configured name (after any automatic replacement). */
+export function resolvedModel(model: string): string {
+  return replaced.get(model) ?? model;
+}
+
+/** The model a "no longer available" error suggests, else the latest Flash. */
+export function replacementFor(model: string, message: string): string | null {
+  // "…use models/gemini-3.8-flash for…": take the name, minus any sentence punctuation after it.
+  const suggested = message.match(/use models\/(gemini-[\w.-]+)/)?.[1]?.replace(/[.-]+$/, "");
+  const next = suggested ?? LATEST_FLASH;
+  return next === model ? null : next;
 }
 
 /** JSON Schema keywords some Gemini models reject; dropped on a retry if the schema is refused. */
@@ -53,8 +73,26 @@ export interface GeminiRequest {
   generationConfig?: Record<string, unknown>;
 }
 
-/** One generateContent call. Retries are the caller's job (withRetry). */
+/**
+ * One generateContent call. Retries are the caller's job (withRetry). If the
+ * configured model has been retired, switches once to the suggested model
+ * (or the latest Flash) and keeps using it.
+ */
 export async function geminiGenerate(apiKey: string, model: string, req: GeminiRequest, signal: AbortSignal): Promise<GeminiResponse> {
+  try {
+    return await generateWith(apiKey, resolvedModel(model), req, signal);
+  } catch (err) {
+    if (!(err instanceof AiConfigError) || !err.message.startsWith("Gemini model not available")) throw err;
+    const next = replacementFor(resolvedModel(model), err.message);
+    if (!next) throw err;
+    const out = await generateWith(apiKey, next, req, signal);
+    replaced.set(model, next);
+    console.warn(`GEMINI_MODEL ${model} isn't available; using ${next}. Update GEMINI_MODEL in .env.`);
+    return out;
+  }
+}
+
+async function generateWith(apiKey: string, model: string, req: GeminiRequest, signal: AbortSignal): Promise<GeminiResponse> {
   const send = (body: GeminiRequest) =>
     fetch(`${base()}/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
@@ -72,7 +110,7 @@ export async function geminiGenerate(apiKey: string, model: string, req: GeminiR
       res = await send(simplifyRequest(req));
     }
   } catch (err) {
-    if (err instanceof ProviderError || signal.aborted) throw err;
+    if (err instanceof ProviderError || err instanceof AiConfigError || signal.aborted) throw err;
     throw new ProviderError("Can't reach the Gemini API. Check your internet connection.", true);
   }
   const body = safeJson(await res.text());

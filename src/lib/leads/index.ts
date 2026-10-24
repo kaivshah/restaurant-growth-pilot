@@ -8,7 +8,7 @@ import { db } from "@/lib/db";
 import { DAILY_DRAFT_CAP, draftsToday, json, logAnalysisCall, logCall, usableReports } from "@/lib/drafts";
 import { eventsFromEnv } from "@/lib/events";
 import { type LatLng, domainOf, isUsefulDomain, milesBetween } from "@/lib/geo";
-import { AiBusyError, type CopyProvider, type FactsPacket, type PitchFacts, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
+import { AiBusyError, AiConfigError, type CopyProvider, type FactsPacket, type PitchFacts, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
 import { INDEPENDENT_LINE } from "@/lib/llm/validate";
 import { isBrandSafe } from "@/lib/offers";
 import { type Place, type PlacesProvider, SEARCHES, placesFromEnv } from "@/lib/places";
@@ -36,6 +36,9 @@ export function mapsUrl(placeId: string, name: string) {
 const fmtDate = (d: Date) => d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/Los_Angeles" });
 
 type Counts = { leads: number; contacts: number; events: number; notes: string[] };
+
+/** Provider error texts can be long; notes keep the first 160 characters. */
+export const short = (text: string, max = 160) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
 /**
  * One LEADS job: find nearby businesses and events, look up contacts, let the
@@ -97,14 +100,14 @@ export async function scanArea(restaurantId: string, opts: { force?: boolean; no
     return `${message}.`;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    // The search itself worked; only the AI step waits. The retry reuses this scan.
-    const searched = err instanceof AiBusyError;
+    // The search itself worked; only the AI step waits (or needs fixing). The retry reuses this scan.
+    const searched = err instanceof AiBusyError || err instanceof AiConfigError;
     await db.leadScan.update({
       where: { id: scan.id },
       data: {
-        status: searched ? "DONE" : "FAILED",
+        status: err instanceof AiBusyError ? "DONE" : "FAILED",
         ...(searched ? { leadsFound: counts.leads, contactsFound: counts.contacts, eventsFound: counts.events } : {}),
-        message: searched ? `${counts.leads} businesses, ${counts.contacts} new contacts, ${counts.events} events; pitches waiting for the AI` : message,
+        message: err instanceof AiBusyError ? `${counts.leads} businesses, ${counts.contacts} new contacts, ${counts.events} events; pitches waiting for the AI` : short(message, 300),
         finishedAt: new Date(),
       },
     });
@@ -157,11 +160,15 @@ async function findLeads(restaurant: Restaurant, center: LatLng, places: PlacesP
     try {
       for (const p of await places.search(s.category, center, restaurant.radiusMiles)) if (!seen.has(p.placeId)) seen.set(p.placeId, p);
     } catch (err) {
-      counts.notes.push(`${s.query} search failed (${err instanceof Error ? err.message : String(err)})`);
+      counts.notes.push(`${s.query} search failed (${short(err instanceof Error ? err.message : String(err))})`);
     }
   }
   if (seen.size === 0 && counts.notes.length === SEARCHES.length) throw new Error(`Every area search failed: ${counts.notes[0]}`);
   for (const p of seen.values()) if (await saveLead(restaurant, center, p, places.name, now)) counts.leads++;
+
+  // Businesses from another source (e.g. sample data from testing) don't mix with this scan.
+  const other = await db.lead.deleteMany({ where: { restaurantId: restaurant.id, source: { not: places.name }, status: { not: "APPROVED" } } });
+  if (other.count) counts.notes.push(`removed ${other.count} businesses from an earlier ${places.name === "fake" ? "real" : "sample"} scan`);
 
   // Leads nobody acted on are removed once their Place data is too old to keep.
   const stale = await db.lead.deleteMany({ where: { restaurantId: restaurant.id, status: "NEW", fetchedAt: { lt: new Date(now.getTime() - PLACE_TTL_MS) } } });
@@ -194,7 +201,7 @@ async function findContacts(restaurantId: string, provider: ContactsProvider, no
       counts.contacts += (await lookupContacts(lead.id, domain, provider, now)).created;
     } catch (err) {
       if (err instanceof QuotaError) {
-        counts.notes.push(`contact lookups paused: ${err.message}`);
+        counts.notes.push(`contact lookups paused: ${short(err.message)}`);
         break;
       }
       counts.notes.push(`contact lookup failed for ${domain}`);
@@ -224,7 +231,7 @@ export async function lookupContacts(leadId: string, domain: string, provider: C
 }
 
 async function findEvents(restaurant: Restaurant, center: LatLng, places: PlacesProvider, providers: ReturnType<typeof eventsFromEnv>, now: Date, counts: Counts) {
-  await db.event.deleteMany({ where: { restaurantId: restaurant.id, startsAt: { lt: now } } });
+  await db.event.deleteMany({ where: { restaurantId: restaurant.id, OR: [{ startsAt: { lt: now } }, { source: { notIn: providers.map((p) => p.name) } }] } });
   if (providers.length === 0) {
     counts.notes.push("event sources are off");
     return;
@@ -236,7 +243,7 @@ async function findEvents(restaurant: Restaurant, center: LatLng, places: Places
     try {
       found = await provider.upcoming(center, restaurant.radiusMiles, now, to);
     } catch (err) {
-      counts.notes.push(`${provider.name} events failed (${err instanceof Error ? err.message : String(err)})`);
+      counts.notes.push(`${provider.name} events failed (${short(err instanceof Error ? err.message : String(err))})`);
       continue;
     }
     for (const e of found) {
@@ -372,6 +379,7 @@ export async function draftPitch(
   const copy = await writeOfferCopy(provider, packet);
   await logCall(restaurant.id, copy.log);
   if (!copy.ok) {
+    if (copy.fatal) throw new AiConfigError(copy.message);
     if (copy.retryable) throw new AiBusyError(copy.message, copy.retryAfterMs);
     return { kind: "failed", message: copy.message };
   }
@@ -462,6 +470,7 @@ async function draftPitches(restaurant: Restaurant, now: Date): Promise<{ create
   let created = 0;
   let reused = 0;
   const pitched = new Set<string>();
+  const failed: string[] = [];
 
   for (const { pitch: p, ai } of list) {
     const lead = leads.find((l) => l.id === p.lead_id);
@@ -476,8 +485,9 @@ async function draftPitches(restaurant: Restaurant, now: Date): Promise<{ create
     const res = await draftPitch(restaurant, provider, lead, event, p, meta);
     if (res.kind === "created") created++;
     else if (res.kind === "reused") reused++;
-    else if (res.kind === "failed") chosen.notes.push(`couldn't write the pitch to ${lead.name} (${res.message})`);
+    else if (res.kind === "failed") failed.push(res.message);
   }
+  if (failed.length) chosen.notes.push(`couldn't write ${failed.length} ${failed.length === 1 ? "pitch" : "pitches"}: ${short(failed[0])}`);
 
   // Pitches no longer chosen leave the inbox if they were still waiting.
   const dropped = await db.draft.findMany({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: "PENDING", leadId: { notIn: [...pitched] } }, select: { id: true, leadId: true } });
@@ -521,6 +531,11 @@ async function choosePitches(restaurant: Restaurant, ctx: LeadContext): Promise<
   const run = await db.analysisRun.create({ data: { restaurantId: restaurant.id, purpose: "leads", provider: analyst.provider, model: analyst.model, dataHash } });
   const started = Date.now();
   const outcome = await runLeadAnalysis(analyst, ctx);
+  if (outcome.fatal) {
+    await db.analysisRun.update({ where: { id: run.id }, data: { status: "FAILED", error: outcome.error ?? null, model: analyst.model, finishedAt: new Date() } });
+    await logAnalysisCall(restaurant.id, analyst, outcome, started, "lead-analysis");
+    throw new AiConfigError(outcome.error ?? "The AI provider rejected the request.");
+  }
   if (outcome.busy) {
     await db.analysisRun.delete({ where: { id: run.id } });
     await logAnalysisCall(restaurant.id, analyst, outcome, started, "lead-analysis");
@@ -530,6 +545,7 @@ async function choosePitches(restaurant: Restaurant, ctx: LeadContext): Promise<
     where: { id: run.id },
     data: {
       status: outcome.status,
+      model: analyst.model,
       error: outcome.error ?? null,
       accepted: json({ pitches: outcome.pitches, skipped: outcome.skipped }),
       rejected: json(outcome.rejected.map((r) => ({ kind: "pitch", ...r }))),
@@ -542,7 +558,7 @@ async function choosePitches(restaurant: Restaurant, ctx: LeadContext): Promise<
     },
   });
   await logAnalysisCall(restaurant.id, analyst, outcome, started, "lead-analysis");
-  if (outcome.status !== "DONE") return fallback(`AI choice failed (${outcome.error}); used the top-scored leads`, run.id);
+  if (outcome.status !== "DONE") return fallback(`AI choice failed (${short(outcome.error ?? "unknown error")}); used the top-scored leads`, run.id);
   return {
     pitches: outcome.pitches,
     skipped: outcome.skipped.map((x) => x.lead_id),

@@ -1,5 +1,5 @@
 import type { ZodType, ZodTypeDef } from "zod";
-import { ProviderError } from "@/lib/llm/types";
+import { AiConfigError, ProviderError } from "@/lib/llm/types";
 import { type RetryOptions, withRetry } from "@/lib/llm/retry";
 import type { AnalystModel, ToolResult } from "./models";
 import type { ToolDef } from "./tools";
@@ -20,6 +20,8 @@ export interface LoopResult<S> {
   error?: string;
   /** Set when the model was busy or over its limit, so the job can try again later */
   busy?: { retryAfterMs?: number };
+  /** Set when the provider rejected the setup (bad key, unknown model); retrying won't help */
+  fatal?: boolean;
   submission?: S;
   toolLog: ToolLog;
   toolCalls: number;
@@ -72,8 +74,10 @@ export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, 
       const current = input;
       ({ value: turn } = await withRetry((signal) => session.send(current, signal), { timeoutMs: 120_000, ...limits.retry }));
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof AiConfigError) return { ...fail(message), fatal: true };
       const busy = !(err instanceof ProviderError) || err.retryable ? { retryAfterMs: err instanceof ProviderError ? err.retryAfterMs : undefined } : undefined;
-      return { ...fail(err instanceof Error ? err.message : String(err)), busy };
+      return { ...fail(message), busy };
     }
     out.inputTokens += turn.inputTokens;
     out.outputTokens += turn.outputTokens;

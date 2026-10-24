@@ -205,6 +205,7 @@ export interface LeadOutcome {
   status: "DONE" | "FAILED";
   error?: string;
   busy?: { retryAfterMs?: number };
+  fatal?: boolean;
   pitches: Pitch[];
   rejected: { title: string; reasons: string[] }[];
   skipped: { lead_id: string; reason: string }[];

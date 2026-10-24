@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { geminiAnalyst } from "@/lib/analyst/models";
-import { AiBusyError } from "@/lib/llm";
+import { AiBusyError, AiConfigError, writeOfferCopy } from "@/lib/llm";
 import { jobState, retryLater } from "@/lib/drafts";
-import { geminiError, simplifySchema } from "./gemini";
+import { geminiError, replacementFor, simplifySchema } from "./gemini";
 import { geminiProvider } from "./providers";
 import { ProviderError } from "./types";
 
@@ -16,15 +16,15 @@ describe("Gemini errors", () => {
       error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded", details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "37s" }] },
     });
     expect(err).toBeInstanceOf(ProviderError);
-    expect(err.retryable).toBe(true);
-    expect(err.retryAfterMs).toBe(37_000);
+    expect((err as ProviderError).retryable).toBe(true);
+    expect((err as ProviderError).retryAfterMs).toBe(37_000);
     expect(err.message).toMatch(/free limit/);
   });
 
   it("treats a bad key as permanent", () => {
     const err = geminiError(400, { error: { code: 400, message: "API key not valid. Please pass a valid API key." } });
-    expect(err.retryable).toBe(false);
-    expect(err.message).toBe("Gemini API key is missing or invalid");
+    expect(err).toBeInstanceOf(AiConfigError);
+    expect(err.message).toMatch(/Gemini API key is missing or invalid/);
   });
 
   it("can drop schema keywords a model refuses", () => {
@@ -111,5 +111,43 @@ describe("waiting for a busy AI", () => {
     expect(jobState({ status: "QUEUED", runAfter: new Date(now.getTime() + 60_000) }, now)).toBe("waiting");
     expect(jobState({ status: "QUEUED", runAfter: null }, now)).toBe("working");
     expect(jobState({ status: "DONE", runAfter: null }, now)).toBe("idle");
+  });
+});
+
+const RETIRED =
+  "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements. We recommend you to use the Interactions API (https://ai.google.dev/gemini-api/docs/get-started).";
+const packet = { restaurant: { name: "S", brand: null, kind: "INDEPENDENT" as const }, offer: { key: "k", title: "T", schedule: "S", audience: "A", copyLabel: "Subject" }, facts: [], rules: { brandSafe: false, maxDiscountPct: 10, codePlaceholder: null } };
+const okCopy = { candidates: [{ content: { role: "model", parts: [{ text: '{"headline":"Hi","body":"Hello there."}' }] } }] };
+
+describe("retired Gemini models", () => {
+  it("reads the suggested replacement, else uses the latest Flash", () => {
+    expect(replacementFor("gemini-2.5-flash", RETIRED)).toBe("gemini-3.8-flash");
+    expect(replacementFor("gemini-9-flash", "models/gemini-9-flash is not found for API version v1beta")).toBe("gemini-flash-latest");
+    expect(replacementFor("gemini-flash-latest", "not found")).toBeNull();
+  });
+
+  it("switches to the replacement and keeps using it", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return url.includes("gemini-2.5-flash") ? reply({ error: { code: 404, status: "NOT_FOUND", message: RETIRED } }, 404) : reply(okCopy);
+      }),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const p = geminiProvider("key", "gemini-2.5-flash");
+    await p.write(packet, new AbortController().signal);
+    expect(p.model).toBe("gemini-3.8-flash");
+    await p.write(packet, new AbortController().signal);
+    expect(urls.map((u) => u.match(/models\/([^:]+)/)?.[1])).toEqual(["gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.8-flash"]);
+  });
+
+  it("stops at once when the key is bad, instead of trying every draft", async () => {
+    const fetchMock = vi.fn(async () => reply({ error: { code: 400, message: "API key not valid. Please pass a valid API key." } }, 400));
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await writeOfferCopy(geminiProvider("bad", "gemini-3.8-flash"), packet, { sleep: async () => {}, timeoutMs: 1000 });
+    expect(out).toMatchObject({ ok: false, fatal: true, retryable: false });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

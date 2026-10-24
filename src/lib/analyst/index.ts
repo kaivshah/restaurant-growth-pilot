@@ -1,5 +1,6 @@
 import type { OfferCandidate } from "@/lib/offers";
 import type { AnalystContext } from "./context";
+import { LATEST_FLASH } from "@/lib/llm/gemini";
 import { fakeAnalyst } from "./fake";
 import { fakeLeadAnalyst } from "./leads/fake";
 import { type AnalystModel, claudeAnalyst, geminiAnalyst, ollamaAnalyst } from "./models";
@@ -25,7 +26,7 @@ export function analystFromEnv(purpose: "offers" | "leads" = "offers", env: Node
   if (choice === "gemini") {
     if (!env.GEMINI_API_KEY) return null;
     // An ANALYST_MODEL left over for another provider (e.g. claude-…) is ignored.
-    const model = env.ANALYST_MODEL?.startsWith("gemini") ? env.ANALYST_MODEL : env.GEMINI_MODEL || "gemini-2.5-flash";
+    const model = env.ANALYST_MODEL?.startsWith("gemini") ? env.ANALYST_MODEL : env.GEMINI_MODEL || LATEST_FLASH;
     return geminiAnalyst(env.GEMINI_API_KEY, model);
   }
   if (choice === "anthropic") {

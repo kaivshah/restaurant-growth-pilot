@@ -3,8 +3,8 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4";
 import { SYSTEM_PROMPT, rewriteRequest, writeRequest } from "./prompt";
 import { parseRetryAfter } from "./retry";
-import { type CopyProvider, ProviderError, type WriteResult } from "./types";
-import { geminiGenerate, replyText, usage } from "./gemini";
+import { AiConfigError, type CopyProvider, ProviderError, type WriteResult } from "./types";
+import { LATEST_FLASH, geminiGenerate, replyText, resolvedModel, usage } from "./gemini";
 import { LIMITS } from "./validate";
 
 const CopySchema = z.object({
@@ -44,7 +44,9 @@ export function geminiProvider(apiKey: string, model: string): CopyProvider {
   }
   return {
     name: "gemini",
-    model,
+    get model() {
+      return resolvedModel(model);
+    },
     write: (packet, signal) => call(writeRequest(packet), signal),
     rewrite: (packet, current, instruction, signal) => call(rewriteRequest(packet, current, instruction), signal),
   };
@@ -52,16 +54,17 @@ export function geminiProvider(apiKey: string, model: string): CopyProvider {
 
 // ---------- Claude (Anthropic) ----------
 
-function anthropicError(err: unknown): ProviderError {
+function anthropicError(err: unknown): ProviderError | AiConfigError {
   if (err instanceof Anthropic.RateLimitError) {
     return new ProviderError("Claude rate limit reached", true, parseRetryAfter(err.headers?.get("retry-after")));
   }
   if (err instanceof Anthropic.InternalServerError || err instanceof Anthropic.APIConnectionError) {
     return new ProviderError(`Claude unavailable: ${err.message}`, true);
   }
-  if (err instanceof Anthropic.AuthenticationError) return new ProviderError("Claude API key is missing or invalid", false);
+  if (err instanceof Anthropic.AuthenticationError) return new AiConfigError("Claude API key is missing or invalid. Check ANTHROPIC_API_KEY in .env.");
+  if (err instanceof Anthropic.NotFoundError) return new AiConfigError(`Claude model not found: ${err.message}`);
   if (err instanceof Anthropic.APIError) return new ProviderError(`Claude error ${err.status}: ${err.message}`, false);
-  if (err instanceof ProviderError) return err;
+  if (err instanceof ProviderError || err instanceof AiConfigError) return err;
   return new ProviderError(err instanceof Error ? err.message : String(err), false);
 }
 
@@ -169,7 +172,7 @@ export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): CopyProvi
   }
   if (choice === "gemini") {
     if (!env.GEMINI_API_KEY) return null;
-    return geminiProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL || "gemini-2.5-flash");
+    return geminiProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL || LATEST_FLASH);
   }
   return null;
 }
