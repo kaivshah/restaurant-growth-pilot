@@ -39,7 +39,8 @@ export interface LeadContext extends AnalystContext {
 }
 
 export const OFFERS = ["free_cookie_platter", "free_drinks_tray", "free_delivery"] as const;
-export const MAX_PITCHES = 8;
+/** Most pitches one scan puts in the inbox (AI picks plus top matches). */
+export const MAX_PITCHES = Math.max(1, Number(process.env.PITCHES_PER_SCAN ?? 15));
 
 const leadIdArg = z.object({ lead_id: z.string() });
 
@@ -55,7 +56,7 @@ export const LEAD_TOOLS: ToolDef<unknown, LeadContext>[] = [
         source: "Area scan (Google Places)",
         leads: ctx.leads
           .filter((l) => l.status !== "EXCLUDED")
-          .slice(0, top ?? 20)
+          .slice(0, top ?? 40)
           .map((l) => ({
             lead_id: l.id,
             name: l.name,
@@ -190,7 +191,7 @@ export const LEAD_SYSTEM = `You help a small restaurant owner win catering order
 
 How to work:
 1. Call list_leads, get_rules and get_local_events. Use get_lead for the leads you are considering, to see who we can contact there.
-2. Pick at most ${MAX_PITCHES} leads with the best chance of ordering: places with many people who eat lunch together, close by, with a contact who arranges food (office manager, admin, HR, events). Skip weak or risky leads and say why.
+2. Pick up to ${MAX_PITCHES} leads with the best chance of ordering: places with many people who eat lunch together, close by. A contact who arranges food (office manager, admin, HR, events) is a plus, but don't skip a good lead just because we have no contact yet: the owner can find or add one. Skip weak or risky leads and say why.
 3. For upcoming events, pitch the event's venue (venue_lead_id) 2–6 weeks ahead, e.g. lunch for exhibitors, staff or teams.
 4. Choose an offer for each: free_cookie_platter, free_drinks_tray or free_delivery, allowed by the owner's rules. Use get_hourly_sales to avoid promising delivery in the store's own busiest hour.
 5. Finish by calling submit_pitches exactly once.
@@ -265,15 +266,22 @@ export async function runLeadAnalysis(model: AnalystModel, ctx: LeadContext, lim
   return out;
 }
 
-/** Without an AI analyst: the best-scored leads, plus event venues, with the default offer. */
-export function defaultPitches(ctx: LeadContext): Pitch[] {
+/**
+ * Without an AI analyst, or to top up its picks: event venues first, then
+ * the best-scored leads, with the default offer. Leads in exclude are left out.
+ */
+export function defaultPitches(ctx: LeadContext, opts: { exclude?: Set<string>; limit?: number } = {}): Pitch[] {
   const offer = ctx.rules.allowFreeExtra ? "free_cookie_platter" : ctx.rules.allowFreeDelivery ? "free_delivery" : null;
-  if (!offer) return [];
-  const eventPitches: Pitch[] = ctx.events
-    .filter((e) => e.venueLeadId && ctx.leads.some((l) => l.id === e.venueLeadId && (l.status === "NEW" || l.status === "DRAFTED")))
-    .slice(0, 2)
-    .map((e) => ({
-      lead_id: e.venueLeadId!,
+  const limit = opts.limit ?? MAX_PITCHES;
+  if (!offer || limit <= 0) return [];
+  const open = (id: string) => !opts.exclude?.has(id) && ctx.leads.some((l) => l.id === id && (l.status === "NEW" || l.status === "DRAFTED"));
+  const taken = new Set<string>();
+  const eventPitches: Pitch[] = [];
+  for (const e of ctx.events) {
+    if (eventPitches.length >= Math.min(2, limit) || !e.venueLeadId || !open(e.venueLeadId) || taken.has(e.venueLeadId)) continue;
+    taken.add(e.venueLeadId);
+    eventPitches.push({
+      lead_id: e.venueLeadId,
       event_id: e.id,
       contact_id: ctx.leads.find((l) => l.id === e.venueLeadId)?.contacts[0]?.id,
       offer,
@@ -281,11 +289,11 @@ export function defaultPitches(ctx: LeadContext): Pitch[] {
       why: e.reasons.join(". "),
       confidence: "medium",
       evidence: [],
-    }));
-  const taken = new Set(eventPitches.map((p) => p.lead_id));
+    });
+  }
   const leadPitches: Pitch[] = ctx.leads
-    .filter((l) => (l.status === "NEW" || l.status === "DRAFTED") && !taken.has(l.id))
-    .slice(0, MAX_PITCHES - eventPitches.length)
+    .filter((l) => open(l.id) && !taken.has(l.id))
+    .slice(0, limit - eventPitches.length)
     .map((l) => ({
       lead_id: l.id,
       contact_id: l.contacts[0]?.id,

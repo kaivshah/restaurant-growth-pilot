@@ -7,6 +7,7 @@ import { type LocalEvent, fromPredictHq, fromTicketmaster } from "@/lib/events";
 import { domainOf, isUsefulDomain, milesBetween } from "@/lib/geo";
 import { validateCopy } from "@/lib/llm";
 import { type Place, fromGooglePlace } from "@/lib/places";
+import { withTopUp } from "./index";
 import { scoreEvent, scoreLead } from "./score";
 
 const place = (over: Partial<Place> = {}): Place => ({
@@ -260,6 +261,31 @@ describe("lead analyst run", () => {
     expect(pitches.map((p) => p.lead_id)).toEqual(["L2", "L1", "L3"]);
     expect(defaultPitches(leadCtx({ rules: { allowFreeExtra: false } }))[0].offer).toBe("free_delivery");
     expect(defaultPitches(leadCtx({ rules: { allowFreeExtra: false, allowFreeDelivery: false } }))).toEqual([]);
+  });
+});
+
+describe("filling the inbox", () => {
+  it("adds the best-scored leads the AI didn't pick or skip", () => {
+    const ctx = leadCtx();
+    const list = withTopUp([pitch()], ["L3"], ctx);
+    expect(list.map((x) => [x.pitch.lead_id, x.ai])).toEqual([
+      ["L1", true],
+      ["L2", false],
+    ]);
+    expect(list[1].pitch.event_id).toBe("E1");
+  });
+
+  it("never tops up excluded or approved leads", () => {
+    const ctx = leadCtx();
+    ctx.leads[1].status = "EXCLUDED";
+    ctx.leads[2].status = "APPROVED";
+    expect(withTopUp([], [], ctx).map((x) => x.pitch.lead_id)).toEqual(["L1"]);
+  });
+
+  it("respects the limit", () => {
+    const ctx = leadCtx();
+    expect(defaultPitches(ctx, { limit: 1 })).toHaveLength(1);
+    expect(defaultPitches(ctx, { exclude: new Set(["L1", "L2", "L3"]) })).toEqual([]);
   });
 });
 

@@ -31,7 +31,7 @@ After setup, and whenever the owner clicks **Scan my area**, a background job:
 3. Looks up who orders food at the best places (Hunter.io domain search, office managers and admins first), and verifies the top email.
 4. Finds upcoming events 7–60 days ahead (PredictHQ and/or Ticketmaster), scores them, and matches each venue to a nearby place so the venue can be pitched 2–6 weeks ahead.
 5. Lets the AI lead analyst choose who to pitch and what to offer (free cookie platter, drinks tray or delivery, as the owner's rules allow), with the same checks as the offer analyst: every number it writes must come from the scan. With the analyst off, the top-scored leads and event venues get the default offer.
-6. Drafts a pitch email for each, which must say a franchise is independently owned and operated.
+6. Drafts a pitch email for each, which must say a franchise is independently owned and operated. A scan puts up to `PITCHES_PER_SCAN` (15) pitches in the inbox: the AI's picks first ("AI pick"), then the best-scored businesses it didn't pick or skip ("Top match"). Pitches without a contact are allowed; **Find contact** spends one Hunter lookup on that business when you ask, or you can type a contact in. Any other business can be pitched from **Leads & events** with **Pitch this business**.
 
 The **Catering** tab in the Approval Inbox shows each pitch with its fit score, reasons, event, contact (editable) and email (editable by hand or with AI). Skipping with a reason like "Wrong kind of business" keeps that business out of future pitches. Approving marks it ready: **nothing is sent yet**. Gmail sending, follow-ups and replies come in milestone 3b. The **Leads & events** page lists every business and event found, with filters, Google Maps links, exclude/include and manual contacts.
 
@@ -112,7 +112,7 @@ The owner can approve, edit, skip (with a reason), undo, or ask the AI to rewrit
 - Drafts are built by a background job queue (`DraftJob` table), one job at a time per restaurant, with at most 2 AI calls in flight.
 - 429s, 5xx errors and timeouts (30 s) are retried with exponential backoff and jitter (≈1 s, 2 s, 4 s), honouring `retry-after`. Other errors aren't retried.
 - If the AI is still busy, the whole job waits and retries later (see "AI" above); a bad key or other permanent error is shown in the inbox instead.
-- Each restaurant gets at most `DAILY_DRAFT_CAP` new drafts a day (default 20).
+- Each restaurant gets at most `DAILY_DRAFT_CAP` new drafts a day (default 40, offers and pitches together).
 - Every AI call is logged in the `LlmCall` table (provider, model, tokens, time, outcome, error).
 
 #### Checking the data

@@ -6,6 +6,8 @@ import { REWRITE_LIMIT, jobState } from "@/lib/drafts";
 import { LEAD_SKIP_REASONS } from "@/lib/leads/score";
 import { LIMITS } from "@/lib/llm/validate";
 import { approveDraft, scanMyArea, setSkipReason, skipDraft, undoDraft } from "./actions";
+import { ActionButton } from "../leads/action-button";
+import { findContact } from "../leads/actions";
 import { ContactForm } from "./contact-form";
 import { CopyEditor } from "./copy-editor";
 import { SourcePill, Tick, fmtValue } from "./parts";
@@ -49,6 +51,8 @@ export async function CateringTab({
   const working = jobState(job) === "working";
   const selected = drafts.find((x) => x.id === selectedId) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
   const ev = selected?.evidence as PitchEvidence | null;
+  // e.g. "AI picked 6 of 88 businesses (…), 9 more added as top matches", from the scan summary
+  const picked = scan?.message?.match(/AI picked [^;]*?(?=, stopped|, couldn't|;|$)|chose the top-scored leads[^;,]*/)?.[0]?.replace(/^chose/, "Chose");
 
   return (
     <>
@@ -59,6 +63,7 @@ export async function CateringTab({
           ) : scan ? (
             <>
               Last scan {when(scan.createdAt)}: <strong className="text-ink">{scan.leadsFound} businesses</strong>, {scan.eventsFound} upcoming events.
+              {picked && <span className="block text-sm">{picked}. Pitch any other business from Leads &amp; events.</span>}
             </>
           ) : (
             "We haven't scanned your area yet."
@@ -245,6 +250,17 @@ export async function CateringTab({
                   email={selected.contact?.email ?? null}
                   locked={selected.status !== "PENDING"}
                 />
+                {!selected.contact && selected.status === "PENDING" && selected.lead && (
+                  <div className="-mt-1">
+                    {selected.lead.contactsCheckedAt ? (
+                      <p className="text-[13px] text-muted">We already searched this business&apos;s website and found no one. Add a contact above if you know who orders food.</p>
+                    ) : selected.lead.website ? (
+                      <ActionButton action={findContact} id={selected.lead.id} label="Find contact (1 Hunter lookup)" busyLabel="Searching…" />
+                    ) : (
+                      <p className="text-[13px] text-muted">No website to search. Add a contact above if you know who orders food.</p>
+                    )}
+                  </div>
+                )}
                 {selected.contact && (
                   <p className="-mt-2 text-[13px] text-muted">
                     {selected.contact.source === "owner" ? "Added by you" : `Found by ${selected.contact.source === "hunter" ? "Hunter.io" : "the test contact finder"}`}

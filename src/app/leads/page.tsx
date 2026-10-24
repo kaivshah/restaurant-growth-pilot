@@ -12,7 +12,8 @@ import { scanMyArea } from "../inbox/actions";
 import { AiStatus } from "../inbox/ai-status";
 import { AutoRefresh } from "../inbox/auto-refresh";
 import { AppShell } from "../inbox/shell";
-import { addLeadContact, excludeLead, includeLead } from "./actions";
+import { ActionButton } from "./action-button";
+import { addLeadContact, excludeLead, findContact, includeLead, pitchLead } from "./actions";
 
 const CATEGORIES = ["office", "coworking", "school", "clinic", "gym", "venue"];
 const STATUS: Record<string, { label: string; tone: "sand" | "green" | "sun" | "danger" }> = {
@@ -208,6 +209,18 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                   )}
                 </div>
                 <div className="flex flex-col gap-2">
+                  {l.status === "NEW" && (
+                    <ActionButton
+                      action={pitchLead}
+                      id={l.id}
+                      label="Pitch this business"
+                      busyLabel="Writing the pitch…"
+                      className="min-h-11 w-full rounded-field bg-primary px-4 font-bold text-white hover:bg-primary-hover disabled:opacity-60"
+                    />
+                  )}
+                  {l.status !== "EXCLUDED" && l.contacts.length === 0 && isUsefulDomain(domainOf(l.website)) && !l.contactsCheckedAt && (
+                    <ActionButton action={findContact} id={l.id} label="Find contact (1 Hunter lookup)" busyLabel="Searching…" />
+                  )}
                   {l.status === "EXCLUDED" ? (
                     <form action={includeLead}>
                       <input type="hidden" name="id" value={l.id} />

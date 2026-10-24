@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import type { Contact, Event as EventRow, Lead, Restaurant } from "@prisma/client";
 import { analystFromEnv, buildContext, defaultPitches, estimateCostUsd, runLeadAnalysis } from "@/lib/analyst";
 import type { EventInfo, LeadContext, LeadInfo, LeadOutcome, Pitch } from "@/lib/analyst";
+import { MAX_PITCHES } from "@/lib/analyst/leads";
 import { type ContactsProvider, QuotaError, contactsFromEnv } from "@/lib/contacts";
 import { db } from "@/lib/db";
 import { DAILY_DRAFT_CAP, draftsToday, json, logAnalysisCall, logCall, usableReports } from "@/lib/drafts";
 import { eventsFromEnv } from "@/lib/events";
 import { type LatLng, domainOf, isUsefulDomain, milesBetween } from "@/lib/geo";
-import { AiBusyError, type FactsPacket, type PitchFacts, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
+import { AiBusyError, type CopyProvider, type FactsPacket, type PitchFacts, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
 import { INDEPENDENT_LINE } from "@/lib/llm/validate";
 import { isBrandSafe } from "@/lib/offers";
 import { type Place, type PlacesProvider, SEARCHES, placesFromEnv } from "@/lib/places";
@@ -190,18 +191,7 @@ async function findContacts(restaurantId: string, provider: ContactsProvider, no
     done.add(domain);
     lookups++;
     try {
-      const people = (await provider.findByDomain(domain)).slice(0, CONTACTS_PER_LEAD);
-      for (const [i, c] of people.entries()) {
-        const verification = i === 0 ? await provider.verify(c.email) : null;
-        const existing = await db.contact.findUnique({ where: { leadId_email: { leadId: lead.id, email: c.email } } });
-        if (existing) {
-          if (existing.source !== "owner") await db.contact.update({ where: { id: existing.id }, data: { name: c.name, role: c.role, confidence: c.confidence, verification: verification ?? existing.verification } });
-        } else {
-          await db.contact.create({ data: { leadId: lead.id, name: c.name, role: c.role, email: c.email, confidence: c.confidence, verification, source: provider.name } });
-          counts.contacts++;
-        }
-      }
-      await db.lead.update({ where: { id: lead.id }, data: { contactsCheckedAt: now } });
+      counts.contacts += (await lookupContacts(lead.id, domain, provider, now)).created;
     } catch (err) {
       if (err instanceof QuotaError) {
         counts.notes.push(`contact lookups paused: ${err.message}`);
@@ -210,6 +200,27 @@ async function findContacts(restaurantId: string, provider: ContactsProvider, no
       counts.notes.push(`contact lookup failed for ${domain}`);
     }
   }
+}
+
+/** One Hunter search (plus a check of the best email) for one business. Throws QuotaError when the plan is used up. */
+export async function lookupContacts(leadId: string, domain: string, provider: ContactsProvider, now = new Date()): Promise<{ created: number; best: Contact | null }> {
+  const people = (await provider.findByDomain(domain)).slice(0, CONTACTS_PER_LEAD);
+  let created = 0;
+  let best: Contact | null = null;
+  for (const [i, c] of people.entries()) {
+    const verification = i === 0 ? await provider.verify(c.email) : null;
+    const existing = await db.contact.findUnique({ where: { leadId_email: { leadId, email: c.email } } });
+    let row: Contact;
+    if (existing) {
+      row = existing.source === "owner" ? existing : await db.contact.update({ where: { id: existing.id }, data: { name: c.name, role: c.role, confidence: c.confidence, verification: verification ?? existing.verification } });
+    } else {
+      row = await db.contact.create({ data: { leadId, name: c.name, role: c.role, email: c.email, confidence: c.confidence, verification, source: provider.name } });
+      created++;
+    }
+    if (i === 0) best = row;
+  }
+  await db.lead.update({ where: { id: leadId }, data: { contactsCheckedAt: now } });
+  return { created, best };
 }
 
 async function findEvents(restaurant: Restaurant, center: LatLng, places: PlacesProvider, providers: ReturnType<typeof eventsFromEnv>, now: Date, counts: Counts) {
@@ -335,104 +346,140 @@ export function pitchPacket(restaurant: Restaurant, lead: Lead, contact: Contact
   };
 }
 
-async function draftPitches(restaurant: Restaurant, now: Date): Promise<{ created: number; summary: string }> {
+type PitchMeta = { source: "AI_ANALYST" | "RULES"; analysisRunId: string | null; toolLog: LeadOutcome["toolLog"] };
+type DraftResult = { kind: "created"; draftId: string } | { kind: "reused"; draftId: string } | { kind: "decided" } | { kind: "failed"; message: string };
+
+/**
+ * Writes one pitch draft. Throws AiBusyError when the AI is busy, so a job
+ * can wait and retry; the same facts are never drafted twice.
+ */
+export async function draftPitch(
+  restaurant: Restaurant,
+  provider: CopyProvider,
+  lead: Lead & { contacts: Contact[] },
+  event: EventRow | null,
+  p: Pitch,
+  meta: PitchMeta,
+): Promise<DraftResult> {
+  const contact = lead.contacts.find((c) => c.id === p.contact_id) ?? lead.contacts[0] ?? null;
+  const packet = pitchPacket(restaurant, lead, contact, event, p);
+  const factsHash = createHash("sha256").update(JSON.stringify({ packet, why: p.why, contact: contact?.id ?? null })).digest("hex");
+  const same = await db.draft.findUnique({ where: { restaurantId_factsHash: { restaurantId: restaurant.id, factsHash } } });
+  if (same) return { kind: "reused", draftId: same.id };
+  // A decided pitch for this lead stays decided; only waiting ones are replaced.
+  if (await db.draft.findFirst({ where: { leadId: lead.id, status: { in: ["APPROVED", "SKIPPED"] } } })) return { kind: "decided" };
+
+  const copy = await writeOfferCopy(provider, packet);
+  await logCall(restaurant.id, copy.log);
+  if (!copy.ok) {
+    if (copy.retryable) throw new AiBusyError(copy.message, copy.retryAfterMs);
+    return { kind: "failed", message: copy.message };
+  }
+  await db.draft.deleteMany({ where: { leadId: lead.id, status: "PENDING" } });
+  const checks = [
+    p.offer === "free_delivery" ? "Free delivery, no price cut" : "Free extra, no price cut",
+    `Within your ${restaurant.radiusMiles} mi radius`,
+    ...(restaurant.kind === "FRANCHISE" ? [`Says you're ${INDEPENDENT_LINE}`] : []),
+    ...(contact?.verification === "valid" ? ["Email address verified"] : []),
+  ];
+  const draft = await db.draft.create({
+    data: {
+      restaurantId: restaurant.id,
+      kind: "CATERING_PITCH",
+      leadId: lead.id,
+      contactId: contact?.id ?? null,
+      eventId: event?.id ?? null,
+      offerKey: packet.offer.key,
+      source: meta.source,
+      confidence: meta.source === "AI_ANALYST" ? p.confidence : null,
+      analysisRunId: meta.analysisRunId,
+      category: event ? "Event" : categoryLabel(lead.category),
+      title: lead.name,
+      schedule: packet.offer.schedule,
+      why: p.why,
+      audience: contactLabel(contact),
+      cost: `${OFFER_TEXT[p.offer][0].toUpperCase()}${OFFER_TEXT[p.offer].slice(1)} on a first order of ${restaurant.minCateringOrder}+ people`,
+      measure: "Replies and first orders, once sending is turned on",
+      checks,
+      evidence: json({
+        kind: "pitch",
+        reasons: lead.scoreReasons,
+        citations: citationsFor(p, meta.toolLog),
+        mapsUrl: mapsUrl(lead.placeId, lead.name),
+        event: event ? { title: event.title, date: fmtDate(event.startsAt), attendance: event.attendance, url: event.url, source: event.source } : null,
+        occasion: p.occasion,
+        offer: p.offer,
+      }),
+      copyLabel: "Email subject",
+      facts: packet.facts,
+      headline: copy.copy.headline,
+      body: copy.copy.body,
+      writtenBy: copy.writtenBy,
+      factsHash,
+    },
+  });
+  if (lead.status === "NEW") await db.lead.update({ where: { id: lead.id }, data: { status: "DRAFTED" } });
+  return { kind: "created", draftId: draft.id };
+}
+
+export function contactLabel(contact: Pick<Contact, "name" | "email" | "role"> | null) {
+  return contact ? [contact.name ?? contact.email, contact.role].filter(Boolean).join(", ") : "No contact found yet. Add or find one before sending.";
+}
+
+async function leadContext(restaurant: Restaurant, now: Date) {
   const [leads, eventRows, { rows }, decisions] = await Promise.all([
-    db.lead.findMany({ where: { restaurantId: restaurant.id }, include: { contacts: { orderBy: { createdAt: "asc" } } }, orderBy: { fitScore: "desc" }, take: 60 }),
+    db.lead.findMany({ where: { restaurantId: restaurant.id }, include: { contacts: { orderBy: { createdAt: "asc" } } }, orderBy: { fitScore: "desc" }, take: 80 }),
     db.event.findMany({ where: { restaurantId: restaurant.id, startsAt: { gte: now } }, orderBy: { fitScore: "desc" }, take: 20 }),
     usableReports(restaurant.id),
     db.draft.findMany({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: { in: ["APPROVED", "SKIPPED"] } }, orderBy: { decidedAt: "desc" }, take: 30 }),
   ]);
-  if (leads.length === 0) return { created: 0, summary: "no businesses to pitch yet" };
-  const provider = providerFromEnv();
-  if (!provider) return { created: 0, summary: `no pitches written: AI not set up. ${missingAiReason()}` };
-
   const base = buildContext(
     restaurant,
     rows.map((r) => ({ report: r.data as unknown as ParsedReport, status: r.status === "CONFIRMED" ? "CONFIRMED" : "READ" })),
     decisions.map((d) => ({ title: d.title, status: d.status as "APPROVED" | "SKIPPED", skipReason: d.skipReason, source: d.source })),
   );
   const ctx: LeadContext = { ...base, leads: leads.map(toLeadInfo), events: eventRows.map((e) => toEventInfo(e, now)) };
+  return { leads, eventRows, ctx };
+}
+
+/** The AI's picks, then the best-scored leads it didn't pick or skip, up to MAX_PITCHES. */
+export function withTopUp(aiPicks: Pitch[], skippedIds: string[], ctx: LeadContext): { pitch: Pitch; ai: boolean }[] {
+  const picks = aiPicks.slice(0, MAX_PITCHES).map((pitch) => ({ pitch, ai: true }));
+  const exclude = new Set([...aiPicks.map((p) => p.lead_id), ...skippedIds]);
+  return [...picks, ...defaultPitches(ctx, { exclude, limit: MAX_PITCHES - picks.length }).map((pitch) => ({ pitch, ai: false }))];
+}
+
+async function draftPitches(restaurant: Restaurant, now: Date): Promise<{ created: number; summary: string }> {
+  const { leads, eventRows, ctx } = await leadContext(restaurant, now);
+  if (leads.length === 0) return { created: 0, summary: "no businesses to pitch yet" };
+  const provider = providerFromEnv();
+  if (!provider) return { created: 0, summary: `no pitches written: AI not set up. ${missingAiReason()}` };
 
   const chosen = await choosePitches(restaurant, ctx);
+  const list = chosen.source === "AI_ANALYST" ? withTopUp(chosen.pitches, chosen.skipped, ctx) : chosen.pitches.map((pitch) => ({ pitch, ai: false }));
+  const topUps = list.filter((x) => !x.ai).length;
+  if (chosen.source === "AI_ANALYST" && topUps) chosen.notes.push(`${topUps} more added as top matches`);
   let created = 0;
   let reused = 0;
   const pitched = new Set<string>();
 
-  for (const p of chosen.pitches) {
+  for (const { pitch: p, ai } of list) {
     const lead = leads.find((l) => l.id === p.lead_id);
     if (!lead || lead.status === "EXCLUDED") continue;
-    const contact = lead.contacts.find((c) => c.id === p.contact_id) ?? lead.contacts[0] ?? null;
-    const event = p.event_id ? (eventRows.find((e) => e.id === p.event_id) ?? null) : null;
-    const packet = pitchPacket(restaurant, lead, contact, event, p);
-    const factsHash = createHash("sha256").update(JSON.stringify({ packet, why: p.why, contact: contact?.id ?? null })).digest("hex");
     pitched.add(lead.id);
-    if (await db.draft.findUnique({ where: { restaurantId_factsHash: { restaurantId: restaurant.id, factsHash } } })) {
-      reused++;
-      continue;
-    }
-    // A decided pitch for this lead stays decided; only waiting ones are replaced.
-    if (await db.draft.findFirst({ where: { leadId: lead.id, status: { in: ["APPROVED", "SKIPPED"] } } })) continue;
     if ((await draftsToday(restaurant.id)) >= DAILY_DRAFT_CAP) {
       chosen.notes.push(`stopped at the daily limit of ${DAILY_DRAFT_CAP} drafts`);
       break;
     }
-
-    const copy = await writeOfferCopy(provider, packet);
-    await logCall(restaurant.id, copy.log);
-    if (!copy.ok) {
-      // Busy: the job tries again later and skips pitches already written.
-      if (copy.retryable) throw new AiBusyError(copy.message, copy.retryAfterMs);
-      chosen.notes.push(`couldn't write the pitch to ${lead.name} (${copy.message})`);
-      continue;
-    }
-    await db.draft.deleteMany({ where: { leadId: lead.id, status: "PENDING" } });
-    const checks = [
-      p.offer === "free_delivery" ? "Free delivery, no price cut" : "Free extra, no price cut",
-      `Within your ${restaurant.radiusMiles} mi radius`,
-      ...(restaurant.kind === "FRANCHISE" ? [`Says you're ${INDEPENDENT_LINE}`] : []),
-      ...(contact?.verification === "valid" ? ["Email address verified"] : []),
-    ];
-    await db.draft.create({
-      data: {
-        restaurantId: restaurant.id,
-        kind: "CATERING_PITCH",
-        leadId: lead.id,
-        contactId: contact?.id ?? null,
-        eventId: event?.id ?? null,
-        offerKey: packet.offer.key,
-        source: chosen.source,
-        confidence: chosen.source === "AI_ANALYST" ? p.confidence : null,
-        analysisRunId: chosen.analysisRunId,
-        category: event ? "Event" : categoryLabel(lead.category),
-        title: lead.name,
-        schedule: packet.offer.schedule,
-        why: p.why,
-        audience: contact ? [contact.name ?? contact.email, contact.role].filter(Boolean).join(", ") : "No contact found yet. Add one before sending.",
-        cost: `${OFFER_TEXT[p.offer][0].toUpperCase()}${OFFER_TEXT[p.offer].slice(1)} on a first order of ${restaurant.minCateringOrder}+ people`,
-        measure: "Replies and first orders, once sending is turned on",
-        checks,
-        evidence: json({
-          kind: "pitch",
-          reasons: lead.scoreReasons,
-          citations: citationsFor(p, chosen.toolLog),
-          mapsUrl: mapsUrl(lead.placeId, lead.name),
-          event: event ? { title: event.title, date: fmtDate(event.startsAt), attendance: event.attendance, url: event.url, source: event.source } : null,
-          occasion: p.occasion,
-          offer: p.offer,
-        }),
-        copyLabel: "Email subject",
-        facts: packet.facts,
-        headline: copy.copy.headline,
-        body: copy.copy.body,
-        writtenBy: copy.writtenBy,
-        factsHash,
-      },
-    });
-    if (lead.status === "NEW") await db.lead.update({ where: { id: lead.id }, data: { status: "DRAFTED" } });
-    created++;
+    const event = p.event_id ? (eventRows.find((e) => e.id === p.event_id) ?? null) : null;
+    const meta: PitchMeta = ai ? chosen : { source: "RULES", analysisRunId: null, toolLog: [] };
+    const res = await draftPitch(restaurant, provider, lead, event, p, meta);
+    if (res.kind === "created") created++;
+    else if (res.kind === "reused") reused++;
+    else if (res.kind === "failed") chosen.notes.push(`couldn't write the pitch to ${lead.name} (${res.message})`);
   }
 
-  // Pitches the analyst no longer chose leave the inbox if they were still waiting.
+  // Pitches no longer chosen leave the inbox if they were still waiting.
   const dropped = await db.draft.findMany({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: "PENDING", leadId: { notIn: [...pitched] } }, select: { id: true, leadId: true } });
   if (dropped.length) {
     await db.draft.deleteMany({ where: { id: { in: dropped.map((d) => d.id) } } });
@@ -451,14 +498,14 @@ function citationsFor(p: Pitch, log: LeadOutcome["toolLog"]) {
   });
 }
 
-type Chosen = { pitches: Pitch[]; source: "AI_ANALYST" | "RULES"; analysisRunId: string | null; toolLog: LeadOutcome["toolLog"]; notes: string[] };
+type Chosen = { pitches: Pitch[]; skipped: string[]; source: "AI_ANALYST" | "RULES"; analysisRunId: string | null; toolLog: LeadOutcome["toolLog"]; notes: string[] };
 
 /**
  * The lead analyst's choice when ANALYST_PROVIDER is set, else the default
  * rule. A run is reused while the leads, events and rules are unchanged.
  */
 async function choosePitches(restaurant: Restaurant, ctx: LeadContext): Promise<Chosen> {
-  const fallback = (note: string, runId: string | null = null): Chosen => ({ pitches: defaultPitches(ctx), source: "RULES", analysisRunId: runId, toolLog: [], notes: [note] });
+  const fallback = (note: string, runId: string | null = null): Chosen => ({ pitches: defaultPitches(ctx), skipped: [], source: "RULES", analysisRunId: runId, toolLog: [], notes: [note] });
   const analyst = analystFromEnv("leads");
   if (!analyst) return fallback("chose the top-scored leads (AI analyst is off)");
 
@@ -467,8 +514,8 @@ async function choosePitches(restaurant: Restaurant, ctx: LeadContext): Promise<
     .digest("hex");
   const previous = await db.analysisRun.findFirst({ where: { restaurantId: restaurant.id, purpose: "leads", dataHash, status: "DONE" }, orderBy: { createdAt: "desc" } });
   if (previous) {
-    const stored = previous.accepted as unknown as { pitches: Pitch[] } | null;
-    return { pitches: stored?.pitches ?? [], source: "AI_ANALYST", analysisRunId: previous.id, toolLog: (previous.toolLog as unknown as LeadOutcome["toolLog"]) ?? [], notes: ["reused the last AI choice (nothing changed)"] };
+    const stored = previous.accepted as unknown as { pitches: Pitch[]; skipped?: { lead_id: string }[] } | null;
+    return { pitches: stored?.pitches ?? [], skipped: (stored?.skipped ?? []).map((x) => x.lead_id), source: "AI_ANALYST", analysisRunId: previous.id, toolLog: (previous.toolLog as unknown as LeadOutcome["toolLog"]) ?? [], notes: ["reused the last AI choice (nothing changed)"] };
   }
 
   const run = await db.analysisRun.create({ data: { restaurantId: restaurant.id, purpose: "leads", provider: analyst.provider, model: analyst.model, dataHash } });
@@ -498,9 +545,10 @@ async function choosePitches(restaurant: Restaurant, ctx: LeadContext): Promise<
   if (outcome.status !== "DONE") return fallback(`AI choice failed (${outcome.error}); used the top-scored leads`, run.id);
   return {
     pitches: outcome.pitches,
+    skipped: outcome.skipped.map((x) => x.lead_id),
     source: "AI_ANALYST",
     analysisRunId: run.id,
     toolLog: outcome.toolLog,
-    notes: [`AI chose ${outcome.pitches.length} leads (${outcome.rejected.length} rejected by checks, ${outcome.skipped.length} skipped)`],
+    notes: [`AI picked ${outcome.pitches.length} of ${ctx.leads.filter((l) => l.status !== "EXCLUDED").length} businesses (${outcome.rejected.length} blocked by checks, ${outcome.skipped.length} skipped)`],
   };
 }

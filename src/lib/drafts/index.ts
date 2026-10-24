@@ -9,7 +9,7 @@ import { type OfferCandidate, buildOffers, isBrandSafe } from "@/lib/offers";
 import type { ParsedReport } from "@/lib/reports";
 
 /** Most new drafts one restaurant can get per day, to keep AI costs predictable. */
-export const DAILY_DRAFT_CAP = Number(process.env.DAILY_DRAFT_CAP ?? 20);
+export const DAILY_DRAFT_CAP = Number(process.env.DAILY_DRAFT_CAP ?? 40);
 /** Most AI rewrites per draft. */
 export const REWRITE_LIMIT = 5;
 
