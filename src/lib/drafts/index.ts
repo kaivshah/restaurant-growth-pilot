@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { JobKind, Prisma, Restaurant } from "@prisma/client";
+import type { DraftJob, JobKind, Prisma, Restaurant } from "@prisma/client";
 import { analystFromEnv, buildContext, estimateCostUsd, mergeIdeas, proposalToOffer, runAnalysis } from "@/lib/analyst";
 import type { AnalysisOutcome, AnalystContext } from "@/lib/analyst";
 import { db } from "@/lib/db";
@@ -267,7 +267,7 @@ export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFF
  * and leads pages show it) and printed in the server terminal.
  */
 export async function progress(restaurantId: string, kind: JobKind, text: string) {
-  console.log(`[${kind === "LEADS" ? "scan" : kind === "SUGGEST" ? "suggest" : "offers"}] ${text}`);
+  console.log(`[${kind === "LEADS" ? "scan" : kind === "SUGGEST" ? "suggest" : kind === "PITCH" ? "pitch" : "offers"}] ${text}`);
   await db.draftJob.updateMany({ where: { restaurantId, kind, status: "RUNNING" }, data: { message: text } });
 }
 
@@ -280,7 +280,61 @@ const draining = new Set<JobKind>();
  * claimed atomically so two servers can't run the same one.
  */
 export async function processDraftJobs(maxJobs = 20) {
-  await Promise.all((["OFFERS", "LEADS", "SUGGEST"] as const).map((kind) => drain(kind, maxJobs)));
+  await Promise.all((["OFFERS", "LEADS", "SUGGEST", "PITCH"] as const).map((kind) => drain(kind, maxJobs)));
+}
+
+/**
+ * Called by pages and actions after a request. With a separate worker
+ * (`npm run worker`, and JOBS_IN_WEB="false" on the web servers) the web
+ * process only queues work and returns at once.
+ */
+export function kickJobs() {
+  if (process.env.JOBS_IN_WEB === "false") return Promise.resolve();
+  return processDraftJobs();
+}
+
+/**
+ * Claims the oldest runnable job of one kind. FOR UPDATE SKIP LOCKED lets any
+ * number of workers claim jobs at the same time without taking the same one,
+ * and a restaurant never has two jobs of one kind running at once.
+ */
+async function claimNext(kind: JobKind): Promise<DraftJob | null> {
+  const rows = await db.$queryRaw<DraftJob[]>`
+    UPDATE "DraftJob" SET status = 'RUNNING', "startedAt" = now(), attempts = attempts + 1
+    WHERE id = (
+      SELECT j.id FROM "DraftJob" j
+      WHERE j.kind = ${kind}::"JobKind" AND j.status = 'QUEUED' AND (j."runAfter" IS NULL OR j."runAfter" <= now())
+        AND NOT EXISTS (SELECT 1 FROM "DraftJob" r WHERE r."restaurantId" = j."restaurantId" AND r.kind = j.kind AND r.status = 'RUNNING')
+      ORDER BY j."createdAt"
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING *`;
+  return rows[0] ?? null;
+}
+
+export type PitchTarget = { leadId?: string; eventId?: string };
+
+/**
+ * Queue pitches the owner asked for. Targets join a PITCH job that hasn't
+ * started yet, so several clicks become one batch (one AI request for many
+ * pitches). Returns at once; a worker writes the pitches.
+ */
+export async function enqueuePitches(restaurantId: string, targets: PitchTarget[]) {
+  const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind: "PITCH", status: "QUEUED" } });
+  const key = (t: PitchTarget) => `${t.leadId ?? ""}|${t.eventId ?? ""}`;
+  if (waiting) {
+    const merged = [...((waiting.payload as PitchTarget[] | null) ?? []), ...targets];
+    const unique = [...new Map(merged.map((t) => [key(t), t])).values()];
+    return db.draftJob.update({ where: { id: waiting.id }, data: { payload: unique, runAfter: null } });
+  }
+  return db.draftJob.create({ data: { restaurantId, kind: "PITCH", payload: targets } });
+}
+
+/** Targets in PITCH jobs that are waiting or running, for "Writing…" on the page. */
+export async function pitchesInProgress(restaurantId: string): Promise<Set<string>> {
+  const jobs = await db.draftJob.findMany({ where: { restaurantId, kind: "PITCH", status: { in: ["QUEUED", "RUNNING"] } }, select: { payload: true } });
+  return new Set(jobs.flatMap((j) => ((j.payload as PitchTarget[] | null) ?? []).map((t) => t.eventId ?? t.leadId ?? "")));
 }
 
 async function drain(kind: JobKind, maxJobs: number) {
@@ -288,18 +342,8 @@ async function drain(kind: JobKind, maxJobs: number) {
   draining.add(kind);
   try {
     for (let i = 0; i < maxJobs; i++) {
-      const next = await db.draftJob.findFirst({
-        where: { kind, status: "QUEUED", OR: [{ runAfter: null }, { runAfter: { lte: new Date() } }] },
-        orderBy: { createdAt: "asc" },
-      });
+      const next = await claimNext(kind);
       if (!next) return;
-      const busy = await db.draftJob.count({ where: { restaurantId: next.restaurantId, kind, status: "RUNNING" } });
-      if (busy > 0) return;
-      const claimed = await db.draftJob.updateMany({
-        where: { id: next.id, status: "QUEUED" },
-        data: { status: "RUNNING", startedAt: new Date(), attempts: { increment: 1 } },
-      });
-      if (claimed.count === 0) continue;
       try {
         const leads = next.kind === "OFFERS" ? null : await import("@/lib/leads");
         const message =
@@ -307,11 +351,13 @@ async function drain(kind: JobKind, maxJobs: number) {
             ? await leads!.scanArea(next.restaurantId, { force: next.force })
             : next.kind === "SUGGEST"
               ? await leads!.suggestLeads(next.restaurantId)
-              : await buildDraftsFor(next.restaurantId);
+              : next.kind === "PITCH"
+                ? await leads!.generatePitches(next.restaurantId, (next.payload as PitchTarget[] | null) ?? [])
+                : await buildDraftsFor(next.restaurantId);
         await db.draftJob.update({ where: { id: next.id }, data: { status: "DONE", message, finishedAt: new Date(), runAfter: null } });
       } catch (err) {
         if (err instanceof AiBusyError) {
-          await db.draftJob.update({ where: { id: next.id }, data: retryLater(next.attempts + 1, err) });
+          await db.draftJob.update({ where: { id: next.id }, data: retryLater(next.attempts, err) });
           continue;
         }
         await db.draftJob.update({

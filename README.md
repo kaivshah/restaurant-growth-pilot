@@ -145,6 +145,14 @@ Run `npx prisma studio` and open http://localhost:5555 to browse `ReportUpload`,
 
 PDF reports are not read yet; the app asks for a CSV or Excel export instead.
 
+## Caching, background jobs and scaling
+
+External lookups (Google, Hunter, web search, event APIs) go through a shared two-tier cache, pitches are written in batches, and slow work runs as background jobs. See [docs/architecture.md](docs/architecture.md). In short:
+
+- `npm run worker` runs the background jobs in their own process. Run one or more next to the web app in production and set `JOBS_IN_WEB="false"` on the web servers; for local development you can skip it (the web app then runs jobs itself).
+- On **Leads & events**, tick several rows and click **Generate pitches for ticked rows**: one AI request writes up to 8.
+- `GEMINI_RPM` paces Gemini across every process (shared through Postgres). `CACHE="off"` turns the cache off.
+
 ## Run it locally
 
 Requires Node 20+ and Postgres 14+.

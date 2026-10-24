@@ -212,6 +212,7 @@ enum JobKind {
   OFFERS // customer offer ideas from reports
   LEADS // scan the area for businesses and events (no AI, no pitches)
   SUGGEST // AI marks the most promising leads and events
+  PITCH // write pitches the owner asked for (one or many at once)
 }
 
 enum JobStatus {
@@ -235,6 +236,8 @@ model DraftJob {
   attempts     Int        @default(0)
   /// Not before this time (set while waiting for the AI)
   runAfter     DateTime?
+  /// PITCH jobs: what to pitch, e.g. [{"leadId":"…"},{"eventId":"…"}]
+  payload      Json?
   createdAt    DateTime   @default(now())
   startedAt    DateTime?
   finishedAt   DateTime?
@@ -348,7 +351,8 @@ model Lead {
   updatedAt         DateTime   @updatedAt
 
   @@unique([restaurantId, placeId])
-  @@index([restaurantId, status])
+  @@index([restaurantId, status, fitScore])
+  @@index([restaurantId, category, distanceMiles])
 }
 
 model Contact {
@@ -423,4 +427,26 @@ model Event {
 
   @@unique([restaurantId, source, externalId])
   @@index([restaurantId, startsAt])
+  @@index([restaurantId, category, startsAt])
+}
+
+// ---------- Caching and shared limits (scaling) ----------
+
+/// Shared cache for external lookups (Google Places, Hunter, web search,
+/// event APIs), reused across restaurants and server processes.
+model CacheEntry {
+  key       String   @id
+  value     Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+/// Request pacing shared by every server and worker process, e.g. the
+/// Gemini free tier's requests per minute.
+model RateSlot {
+  key  String   @id
+  /// The earliest time the next request may start
+  next DateTime
 }

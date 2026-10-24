@@ -6,8 +6,8 @@ import { z } from "zod";
 import { QuotaError, contactsFromEnv } from "@/lib/contacts";
 import { db } from "@/lib/db";
 import { domainOf, isUsefulDomain } from "@/lib/geo";
-import { enqueueDraftJob, processDraftJobs } from "@/lib/drafts";
-import { contactLabel, generatePitch, lookupContacts } from "@/lib/leads";
+import { type PitchTarget, enqueueDraftJob, enqueuePitches, kickJobs } from "@/lib/drafts";
+import { contactLabel, lookupContacts } from "@/lib/leads";
 import { LEAD_SKIP_REASONS } from "@/lib/leads/score";
 import { requireRestaurant } from "@/lib/restaurant";
 
@@ -93,22 +93,26 @@ export async function findContact(_prev: LeadActionState, formData: FormData): P
   }
 }
 
-/** "Generate pitch" on a business or an event: contact lookup if needed, then one AI-written email. */
-export async function generatePitchAction(_prev: LeadActionState, formData: FormData): Promise<LeadActionState> {
+/**
+ * "Generate pitch" (one row) or "Generate pitches for selected": queues the
+ * work and returns at once. A worker writes them in batches; the page shows
+ * "Writing…" until each pitch is in the inbox.
+ */
+export async function queuePitches(formData: FormData) {
   const restaurant = await requireRestaurant();
-  const leadId = String(formData.get("leadId") ?? "") || undefined;
-  const eventId = String(formData.get("eventId") ?? "") || undefined;
-  if (!leadId && !eventId) return { error: "Nothing to pitch." };
-  const res = await generatePitch(restaurant, { leadId, eventId });
+  const one = String(formData.get("one") ?? "");
+  const picked = one ? [one] : formData.getAll("pick").map(String);
+  const targets = picked.slice(0, 40).flatMap((v): PitchTarget[] => (v.startsWith("event:") ? [{ eventId: v.slice(6) }] : v.startsWith("lead:") ? [{ leadId: v.slice(5) }] : []));
+  if (!targets.length) return;
+  await enqueuePitches(restaurant.id, targets);
+  after(() => kickJobs());
   done();
-  if (!res.ok) return { error: res.error };
-  return { ok: res.note ? `Pitch ready. ${res.note}` : "Pitch ready.", href: `/inbox?tab=catering&d=${res.draftId}` };
 }
 
 /** "AI suggests": the analyst marks the most promising businesses and events, in the background. */
 export async function suggestAction() {
   const restaurant = await requireRestaurant();
   await enqueueDraftJob(restaurant.id, "SUGGEST");
-  after(() => processDraftJobs());
+  after(() => kickJobs());
   done();
 }

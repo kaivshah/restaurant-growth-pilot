@@ -22,8 +22,8 @@ export interface CallLog {
 }
 
 export type WriteOutcome =
-  | { ok: true; copy: OfferCopy; writtenBy: string; log: CallLog }
-  | { ok: false; retryable: boolean; retryAfterMs?: number; message: string; log: CallLog; fatal?: boolean };
+  | { ok: true; copy: OfferCopy; writtenBy: string; log: CallLog | null }
+  | { ok: false; retryable: boolean; retryAfterMs?: number; message: string; log: CallLog | null; fatal?: boolean };
 
 /**
  * Writes copy for one offer with the configured AI provider, with retries and
@@ -72,6 +72,50 @@ export async function writeOfferCopy(provider: CopyProvider, packet: FactsPacket
     const retryAfterMs = err instanceof ProviderError ? err.retryAfterMs : undefined;
     return { ok: false, retryable, retryAfterMs, message, log: log("error", message) };
   }
+}
+
+/** Most pitches per batch request; bigger answers get slower and more likely to be cut off. */
+const BATCH_SIZE = 8;
+
+/**
+ * Writes many pitches with as few requests as possible: up to 8 per request
+ * with the shared rules sent once. Each result goes through the same checks;
+ * anything missing or broken is written again on its own. Results are keyed
+ * by the caller's ids.
+ */
+export async function writeManyCopy(provider: CopyProvider, items: { id: string; packet: FactsPacket }[], retry?: RetryOptions): Promise<Map<string, WriteOutcome>> {
+  const out = new Map<string, WriteOutcome>();
+  const single = async (list: typeof items) => {
+    for (const { id, packet } of list) out.set(id, await writeOfferCopy(provider, packet, retry));
+  };
+  if (!provider.writeMany || items.length < 2) {
+    await single(items);
+    return out;
+  }
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const chunk = items.slice(i, i + BATCH_SIZE);
+    const started = Date.now();
+    const base = { provider: provider.name, purpose: "write" as const };
+    try {
+      const { value, attempts } = await limiter.run(() => withRetry((signal) => provider.writeMany!(chunk, signal), { timeoutMs: 90_000, ...retry }));
+      const log: CallLog = { ...base, model: provider.model, outcome: attempts > 1 ? "retried-ok" : "ok", attempts, inputTokens: value.inputTokens, outputTokens: value.outputTokens, durationMs: Date.now() - started };
+      const redo: typeof items = [];
+      chunk.forEach(({ id, packet }, n) => {
+        const copy = value.items.find((x) => x.id === id);
+        if (!copy || validateCopy(copy, packet).length) return void redo.push({ id, packet });
+        // The batch's one log entry goes with its first pitch.
+        out.set(id, { ok: true, copy: { headline: copy.headline.trim(), body: copy.body.trim() }, writtenBy: `${provider.name}:${provider.model}`, log: n === 0 ? log : null });
+      });
+      await single(redo);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const log: CallLog = { ...base, model: provider.model, outcome: "error", attempts: 1, durationMs: Date.now() - started, error: message };
+      if (err instanceof AiConfigError) chunk.forEach(({ id }, n) => out.set(id, { ok: false, retryable: false, fatal: true, message, log: n === 0 ? log : null }));
+      else if (!(err instanceof ProviderError) || err.retryable) chunk.forEach(({ id }, n) => out.set(id, { ok: false, retryable: true, retryAfterMs: err instanceof ProviderError ? err.retryAfterMs : undefined, message, log: n === 0 ? log : null }));
+      else await single(chunk);
+    }
+  }
+  return out;
 }
 
 export type RewriteOutcome =

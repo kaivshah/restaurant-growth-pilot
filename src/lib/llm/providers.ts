@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4";
-import { SYSTEM_PROMPT, rewriteRequest, writeRequest } from "./prompt";
+import { SYSTEM_PROMPT, batchPitchRequest, rewriteRequest, writeRequest } from "./prompt";
 import { parseRetryAfter } from "./retry";
 import { AiConfigError, type CopyProvider, ProviderError, type WriteResult } from "./types";
 import { LATEST_FLASH, geminiGenerate, replyText, resolvedModel, usage } from "./gemini";
@@ -11,6 +11,25 @@ const CopySchema = z.object({
   headline: z.string(),
   body: z.string(),
 });
+
+const BatchSchema = z.object({ items: z.array(z.object({ id: z.string(), headline: z.string(), body: z.string() })) });
+
+const batchJsonSchema = {
+  type: "object",
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { id: { type: "string" }, headline: { type: "string", maxLength: LIMITS.headline }, body: { type: "string", maxLength: LIMITS.pitchBody } },
+        required: ["id", "headline", "body"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["items"],
+  additionalProperties: false,
+} as const;
 
 const copyJsonSchema = {
   type: "object",
@@ -49,6 +68,21 @@ export function geminiProvider(apiKey: string, model: string): CopyProvider {
     },
     write: (packet, signal) => call(writeRequest(packet), signal),
     rewrite: (packet, current, instruction, signal) => call(rewriteRequest(packet, current, instruction), signal),
+    async writeMany(items, signal) {
+      const res = await geminiGenerate(
+        apiKey,
+        model,
+        {
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: [{ role: "user", parts: [{ text: batchPitchRequest(items) }] }],
+          generationConfig: { responseMimeType: "application/json", responseJsonSchema: batchJsonSchema, temperature: 0.7 },
+        },
+        signal,
+      );
+      const parsed = BatchSchema.safeParse(safeJson(replyText(res)));
+      if (!parsed.success) throw new ProviderError("Gemini returned pitches we couldn't read", true);
+      return { items: parsed.data.items, ...usage(res) };
+    },
   };
 }
 
@@ -101,6 +135,25 @@ export function anthropicProvider(apiKey: string, model: string): CopyProvider {
     model,
     write: (packet, signal) => call(writeRequest(packet), signal),
     rewrite: (packet, current, instruction, signal) => call(rewriteRequest(packet, current, instruction), signal),
+    async writeMany(items, signal) {
+      try {
+        const response = await client.messages.parse(
+          {
+            model,
+            max_tokens: 4000 + items.length * 600,
+            system: SYSTEM_PROMPT,
+            messages: [{ role: "user", content: batchPitchRequest(items) }],
+            output_config: { format: zodOutputFormat(BatchSchema), effort: "low" },
+          },
+          { signal },
+        );
+        if (response.stop_reason === "refusal") throw new ProviderError("Claude declined to write these pitches", false);
+        if (!response.parsed_output) throw new ProviderError("Claude returned pitches we couldn't read", true);
+        return { items: response.parsed_output.items, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
+      } catch (err) {
+        throw anthropicError(err);
+      }
+    },
   };
 }
 

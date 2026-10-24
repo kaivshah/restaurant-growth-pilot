@@ -91,6 +91,9 @@ export function claudeAnalyst(apiKey: string, model: string, effort?: "low" | "m
                 system,
                 tools: toolDefs,
                 messages,
+                // Each turn resends the whole conversation; caching the prefix makes every turn after the first
+                // read the tools, instructions and earlier tool results from cache (about a tenth of the price).
+                cache_control: { type: "ephemeral" },
                 ...(effort ? { output_config: { effort } } : {}),
                 ...(useFallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
               },
@@ -102,7 +105,7 @@ export function claudeAnalyst(apiKey: string, model: string, effort?: "low" | "m
             return {
               toolCalls: response.content.flatMap((b) => (b.type === "tool_use" ? [{ id: b.id, name: b.name, input: b.input }] : [])),
               text: response.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n"),
-              inputTokens: response.usage.input_tokens,
+              inputTokens: response.usage.input_tokens + (response.usage.cache_read_input_tokens ?? 0) + (response.usage.cache_creation_input_tokens ?? 0),
               outputTokens: response.usage.output_tokens,
             };
           } catch (err) {

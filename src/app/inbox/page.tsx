@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { ButtonLink, Card, Notice } from "@/components/ui";
 import { db } from "@/lib/db";
-import { REWRITE_LIMIT, jobState, processDraftJobs, requeueStaleJobs } from "@/lib/drafts";
+import { REWRITE_LIMIT, jobState, kickJobs, requeueStaleJobs } from "@/lib/drafts";
 import { requireRestaurant } from "@/lib/restaurant";
 import { approveDraft, refreshIdeas, setSkipReason, skipDraft, undoDraft } from "./actions";
 import { AiStatus } from "./ai-status";
@@ -35,7 +35,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
 
   // Pick up any work left from a restart.
   await requeueStaleJobs();
-  after(() => processDraftJobs());
+  after(() => kickJobs());
 
   const [drafts, job, leadsJob, lastScan, pendingPitches, lastRun] = await Promise.all([
     db.draft.findMany({

@@ -1,3 +1,4 @@
+import { DAY, cacheKey, cached } from "@/lib/cache";
 import { ProviderError } from "@/lib/llm";
 import { parseRetryAfter, withRetry } from "@/lib/llm/retry";
 
@@ -102,6 +103,15 @@ export function fakeContacts(): ContactsProvider {
   };
 }
 
+/** Who works at a domain doesn't depend on which restaurant asks: cached 30 days for everyone. */
+export function cachedContacts(inner: ContactsProvider): ContactsProvider {
+  return {
+    name: inner.name,
+    findByDomain: (domain) => cached(cacheKey("hunter-domain", domain.toLowerCase()), 30 * DAY, () => inner.findByDomain(domain)),
+    verify: (email) => cached(cacheKey("hunter-verify", email.toLowerCase()), 30 * DAY, () => inner.verify(email)),
+  };
+}
+
 export function contactsFromEnv(env: NodeJS.ProcessEnv = process.env): ContactsProvider | null {
   const choice = (env.CONTACTS_PROVIDER ?? "off").toLowerCase();
   if (choice === "hunter") {
@@ -109,7 +119,7 @@ export function contactsFromEnv(env: NodeJS.ProcessEnv = process.env): ContactsP
       console.warn("CONTACTS_PROVIDER=hunter but HUNTER_API_KEY is not set; contact lookup is off.");
       return null;
     }
-    return hunter(env.HUNTER_API_KEY);
+    return cachedContacts(hunter(env.HUNTER_API_KEY));
   }
   if (choice === "fake" && env.NODE_ENV !== "production") return fakeContacts();
   return null;

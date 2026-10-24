@@ -12,7 +12,8 @@
     "db:migrate": "prisma migrate dev",
     "fixtures": "tsx scripts/make-sample-fixtures.ts",
     "postinstall": "prisma generate",
-    "ai:check": "tsx scripts/check-ai.ts"
+    "ai:check": "tsx scripts/check-ai.ts",
+    "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.2.0",

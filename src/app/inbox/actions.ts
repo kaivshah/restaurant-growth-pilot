@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { after } from "next/server";
 import { db } from "@/lib/db";
-import { REWRITE_LIMIT, enqueueDraftJob, logCall, processDraftJobs } from "@/lib/drafts";
+import { REWRITE_LIMIT, enqueueDraftJob, logCall, kickJobs } from "@/lib/drafts";
 import { missingAiReason, providerFromEnv, rewriteOfferCopy } from "@/lib/llm";
 import { LIMITS, bodyLimit } from "@/lib/llm/validate";
 import { pitchPacket } from "@/lib/leads";
@@ -164,7 +164,7 @@ async function storedPitchPacket(restaurant: Awaited<ReturnType<typeof requireRe
 export async function scanMyArea() {
   const restaurant = await requireRestaurant();
   await enqueueDraftJob(restaurant.id, "LEADS", true);
-  after(() => processDraftJobs());
+  after(() => kickJobs());
   revalidatePath("/inbox");
   revalidatePath("/leads");
 }
@@ -172,6 +172,6 @@ export async function scanMyArea() {
 export async function refreshIdeas() {
   const restaurant = await requireRestaurant();
   await enqueueDraftJob(restaurant.id);
-  after(() => processDraftJobs());
+  after(() => kickJobs());
   revalidatePath("/inbox");
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { providerFromEnv, rewriteOfferCopy, validateCopy, writeOfferCopy } from "./index";
+import { providerFromEnv, rewriteOfferCopy, validateCopy, writeManyCopy, writeOfferCopy } from "./index";
+import { batchPitchRequest } from "./prompt";
 import { parseRetryAfter, withRetry } from "./retry";
 import { type CopyProvider, type FactsPacket, ProviderError } from "./types";
 
@@ -110,14 +111,14 @@ describe("writeOfferCopy", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.writtenBy).toBe("fake:test");
-    expect(out.log.outcome).toBe("retried-ok");
-    expect(out.log.attempts).toBe(2);
+    expect(out.log?.outcome).toBe("retried-ok");
+    expect(out.log?.attempts).toBe(2);
   });
 
   it("reports a busy provider as retryable instead of writing anything", async () => {
     const out = await writeOfferCopy(fake(async () => { throw new ProviderError("down", true, 1000); }), packet, noSleep);
     expect(out).toMatchObject({ ok: false, retryable: true, retryAfterMs: 1000 });
-    expect(out.log.outcome).toBe("error");
+    expect(out.log?.outcome).toBe("error");
   });
 
   it("doesn't retry a bad key later", async () => {
@@ -134,7 +135,7 @@ describe("writeOfferCopy", () => {
     const stubborn = fake(async () => ({ headline: "50% off!", body: "Half price all day. [CODE]" }));
     const bad = await writeOfferCopy(stubborn, packet, noSleep);
     expect(bad).toMatchObject({ ok: false, retryable: false });
-    expect(bad.log.outcome).toBe("invalid-output");
+    expect(bad.log?.outcome).toBe("invalid-output");
   });
 });
 
@@ -155,5 +156,58 @@ describe("choosing a provider", () => {
     expect(providerFromEnv({} as unknown as NodeJS.ProcessEnv)).toBeNull();
     expect(providerFromEnv({ LLM_PROVIDER: "template" } as unknown as NodeJS.ProcessEnv)).toBeNull();
     expect(providerFromEnv({ LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k" } as unknown as NodeJS.ProcessEnv)?.name).toBe("anthropic");
+  });
+});
+
+describe("writing many pitches at once", () => {
+  const pitch = (company: string): FactsPacket => ({
+    restaurant: { name: "Subway #00000", brand: "Subway", kind: "FRANCHISE" },
+    offer: { key: "pitch:free_delivery", title: "free delivery with a first catering order", schedule: "Send this week", audience: company, copyLabel: "Email subject" },
+    facts: ["Free delivery with a first catering order of 10 or more people", `1 mi from ${company}`],
+    rules: { brandSafe: true, maxDiscountPct: 15, codePlaceholder: null },
+    pitch: { company, contactFirstName: null, category: "office", distanceMiles: 1, offer: "free delivery", minOrder: 10, occasion: "Team lunches", event: null },
+  });
+  const ok = (company: string) => ({ headline: `Lunch for ${company}?`, body: `Hi there, we'd love to cater for ${company}. Subway #00000 is independently owned and operated.` });
+  const items = ["Acme", "Globex", "Initech"].map((c, i) => ({ id: `p${i + 1}`, packet: pitch(c) }));
+
+  it("sends the shared rules once and every pitch's facts", () => {
+    const text = batchPitchRequest(items);
+    expect(text.match(/independently owned and operated/g)).toHaveLength(1);
+    expect(text).toContain("### p3");
+    expect(text).toContain("at Initech");
+  });
+
+  it("writes them in one request, and redoes only the ones that break a rule", async () => {
+    let batches = 0;
+    let singles = 0;
+    const provider: CopyProvider = {
+      name: "fake",
+      model: "test",
+      async write(p) {
+        singles++;
+        return ok(p.pitch!.company);
+      },
+      async writeMany(list) {
+        batches++;
+        return { items: list.map(({ id, packet }) => ({ id, ...(packet.pitch!.company === "Globex" ? { headline: "x", body: "Save 50% today" } : ok(packet.pitch!.company)) })) };
+      },
+    };
+    const out = await writeManyCopy(provider, items, noSleep);
+    expect(batches).toBe(1);
+    expect(singles).toBe(1);
+    expect([...out.values()].every((r) => r.ok)).toBe(true);
+  });
+
+  it("marks the whole batch for a retry when the AI is busy", async () => {
+    const provider: CopyProvider = {
+      name: "fake",
+      model: "test",
+      write: async () => ok("x"),
+      writeMany: async () => {
+        throw new ProviderError("429", true, 30_000);
+      },
+    };
+    const out = await writeManyCopy(provider, items, { ...noSleep, retries: 0 });
+    expect([...out.values()].every((r) => !r.ok && r.retryable)).toBe(true);
   });
 });

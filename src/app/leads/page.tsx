@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { Card, Notice, Pill } from "@/components/ui";
 import { analystFromEnv } from "@/lib/analyst";
 import { db } from "@/lib/db";
-import { jobState, processDraftJobs, requeueStaleJobs } from "@/lib/drafts";
+import { jobState, kickJobs, pitchesInProgress, requeueStaleJobs } from "@/lib/drafts";
 import { latestSuggestions, mapsUrl } from "@/lib/leads";
 import { LEAD_SKIP_REASONS, categoryLabel } from "@/lib/leads/score";
 import { requireRestaurant } from "@/lib/restaurant";
@@ -13,8 +13,7 @@ import { scanMyArea } from "../inbox/actions";
 import { AiStatus } from "../inbox/ai-status";
 import { AutoRefresh } from "../inbox/auto-refresh";
 import { AppShell } from "../inbox/shell";
-import { ActionButton } from "./action-button";
-import { addLeadContact, excludeLead, generatePitchAction, includeLead, suggestAction } from "./actions";
+import { addLeadContact, excludeLead, includeLead, queuePitches, suggestAction } from "./actions";
 
 const LEAD_TYPES = ["office", "coworking", "school", "clinic", "gym", "venue"];
 const EVENT_TYPES = ["conference", "expo", "corporate", "community", "sports", "school", "concert", "other"];
@@ -41,7 +40,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const params = await searchParams;
 
   await requeueStaleJobs();
-  after(() => processDraftJobs());
+  after(() => kickJobs());
 
   const now = new Date();
   const [eventCount, leadCount] = await Promise.all([
@@ -73,11 +72,13 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { address: { contains: q, mode: "insensitive" } }] } : {}),
   };
 
-  const [events, leads, scanJob, suggestJob, scan, pending, pitches, suggestions] = await Promise.all([
+  const [events, leads, scanJob, suggestJob, pitchJob, writing, scan, pending, pitches, suggestions] = await Promise.all([
     view === "events" ? db.event.findMany({ where: eventWhere, include: { venueLead: true }, take: 150 }) : Promise.resolve([]),
     view === "businesses" ? db.lead.findMany({ where: leadWhere, include: { contacts: { orderBy: { createdAt: "asc" } } }, take: 150 }) : Promise.resolve([]),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "LEADS" }, orderBy: { createdAt: "desc" } }),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "SUGGEST" }, orderBy: { createdAt: "desc" } }),
+    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "PITCH" }, orderBy: { createdAt: "desc" } }),
+    pitchesInProgress(restaurant.id),
     db.leadScan.findFirst({ where: { restaurantId: restaurant.id }, orderBy: { createdAt: "desc" } }),
     db.draft.count({ where: { restaurantId: restaurant.id, status: "PENDING" } }),
     db.draft.findMany({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: { in: ["PENDING", "APPROVED"] } }, select: { id: true, leadId: true, eventId: true } }),
@@ -85,6 +86,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   ]);
   const scanning = jobState(scanJob) === "working";
   const suggesting = jobState(suggestJob) === "working";
+  const pitching = jobState(pitchJob) === "working";
+  const recentPitchJob = pitchJob && pitchJob.finishedAt && now.getTime() - pitchJob.finishedAt.getTime() < 10 * 60_000 ? pitchJob : null;
   const aiOn = Boolean(analystFromEnv("leads"));
   const pitchFor = (leadId: string | null, eventId: string | null) => pitches.find((p) => (eventId ? p.eventId === eventId : p.leadId === leadId && !p.eventId));
   const aiFor = (leadId: string | null, eventId: string | null) => {
@@ -111,11 +114,13 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   if (sort === "ai") leads.sort(by((l) => (aiFor(l.id, null) ? 0 : 1) * 1000 - l.fitScore));
 
   const tabHref = (v: string) => `/leads?view=${v}`;
-  const waitingJob = jobState(suggestJob) === "waiting" ? suggestJob : scanJob;
+  const waitingJob = [pitchJob, suggestJob].find((j) => jobState(j) === "waiting") ?? scanJob;
 
   return (
     <AppShell current="leads" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
-      {(scanning || suggesting) && <AutoRefresh />}
+      {(scanning || suggesting || pitching) && <AutoRefresh />}
+      {/* Row checkboxes and buttons belong to this form through their form="bulk" attribute. */}
+      <form id="bulk" action={queuePitches} />
       <AiStatus job={waitingJob} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
@@ -146,6 +151,17 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       {scan?.status === "FAILED" && !scanning && (
         <Notice tone="danger" title="The last scan didn't finish.">
           {scan.message}
+        </Notice>
+      )}
+      {pitching && pitchJob?.status === "RUNNING" && pitchJob.message && <p className="font-semibold text-ink-2">{pitchJob.message}</p>}
+      {recentPitchJob?.status === "DONE" && recentPitchJob.message && (
+        <Notice tone="green" title="Pitches written.">
+          {recentPitchJob.message}. <Link href="/inbox?tab=catering">Review them in the inbox</Link>.
+        </Notice>
+      )}
+      {recentPitchJob?.status === "FAILED" && (
+        <Notice tone="danger" title="Pitches weren't written.">
+          {recentPitchJob.message}
         </Notice>
       )}
       {suggestJob?.status === "FAILED" && !suggesting && (
@@ -246,6 +262,13 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </Link>
       </form>
 
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted">Tick several and write them together: one AI request covers up to 8 pitches.</p>
+        <button type="submit" form="bulk" className="min-h-11 rounded-field border-2 border-primary bg-surface px-4 font-bold text-primary-ink hover:bg-primary-soft">
+          Generate pitches for ticked rows
+        </button>
+      </div>
+
       {view === "events" ? (
         events.length === 0 ? (
           <Card className="p-6 text-ink-2">
@@ -265,6 +288,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                 <li key={e.id} className="grid gap-4 rounded-card border border-line bg-surface px-5 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,260px)]">
                   <div className="flex min-w-0 flex-col gap-1.5">
                     <span className="flex flex-wrap items-center gap-1.5">
+                      {!existing && !writing.has(e.id) && <PickBox value={`event:${e.id}`} label={e.title} />}
                       <Pill tone="sun">{cap(e.category)}</Pill>
                       {ai && <Pill tone="green">AI pick · {ai.confidence}</Pill>}
                       <span className="text-[13px] font-bold text-muted">Fit {e.fitScore}</span>
@@ -304,7 +328,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                         <p className="text-[13px] font-semibold text-primary-ink">The pitch is in your inbox to review.</p>
                       </>
                     ) : (
-                      <ActionButton action={generatePitchAction} fields={{ eventId: e.id }} label="Generate pitch" busyLabel="Writing the pitch…" className={primaryBtn} />
+                      <GenerateButton value={`event:${e.id}`} writing={writing.has(e.id)} />
                     )}
                   </div>
                 </li>
@@ -323,6 +347,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               <li key={l.id} className={`grid gap-4 rounded-card border border-line bg-surface px-5 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,260px)] ${l.status === "EXCLUDED" ? "opacity-75" : ""}`}>
                 <div className="flex min-w-0 flex-col gap-1.5">
                   <span className="flex flex-wrap items-center gap-1.5">
+                    {!existing && !writing.has(l.id) && l.status !== "EXCLUDED" && <PickBox value={`lead:${l.id}`} label={l.name} />}
                     <Pill>{categoryLabel(l.category)}</Pill>
                     {ai && <Pill tone="green">AI pick · {ai.confidence}</Pill>}
                     <Pill tone={STATUS[l.status].tone}>
@@ -389,7 +414,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                           </p>
                         </>
                       ) : (
-                        <ActionButton action={generatePitchAction} fields={{ leadId: l.id }} label="Generate pitch" busyLabel="Writing the pitch…" className={primaryBtn} />
+                        <GenerateButton value={`lead:${l.id}`} writing={writing.has(l.id)} />
                       )}
                       <form action={excludeLead} className="flex gap-2">
                         <input type="hidden" name="id" value={l.id} />
@@ -426,5 +451,27 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </ul>
       )}
     </AppShell>
+  );
+}
+
+function PickBox({ value, label }: { value: string; label: string }) {
+  return (
+    <label className="flex min-h-8 items-center gap-1.5 pr-1 text-[13px] font-bold text-muted">
+      <input type="checkbox" name="pick" value={value} form="bulk" className="size-5 accent-[var(--color-primary)]" aria-label={`Select ${label}`} />
+      Select
+    </label>
+  );
+}
+
+/** Submits the bulk form with just this row, so it joins any batch being written. */
+function GenerateButton({ value, writing }: { value: string; writing: boolean }) {
+  return writing ? (
+    <button type="button" disabled className={primaryBtn}>
+      Writing the pitch…
+    </button>
+  ) : (
+    <button type="submit" form="bulk" name="one" value={value} className={primaryBtn}>
+      Generate pitch
+    </button>
   );
 }

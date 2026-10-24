@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { DAY, HOUR, cacheKey, cached } from "@/lib/cache";
 import { LATEST_FLASH, geminiGenerate, replyText } from "@/lib/llm/gemini";
 import { withRetry } from "@/lib/llm/retry";
 import type { EventCategory, LocalEvent } from "./index";
@@ -113,6 +114,20 @@ export function geminiWebEvents(apiKey: string, model: string): WebEventsProvide
   };
 }
 
+/**
+ * One web search per area, date window and company list per day, shared by
+ * every restaurant nearby. An empty answer is kept only 6 hours.
+ */
+export function cachedWebEvents(inner: WebEventsProvider): WebEventsProvider {
+  return {
+    name: inner.name,
+    find: (q) =>
+      cached(cacheKey("web-events", q.address.trim().toLowerCase(), q.radiusMiles, ymd(q.from), ymd(q.to), [...q.companies].sort()), DAY, () => inner.find(q), {
+        ttlFor: (found) => (found.length ? DAY : 6 * HOUR),
+      }),
+  };
+}
+
 /** Sample web events for EVENTS_PROVIDER=fake. */
 export function fakeWebEvents(): WebEventsProvider {
   return {
@@ -137,5 +152,5 @@ export function webEventsFromEnv(env: NodeJS.ProcessEnv = process.env): WebEvent
   if (choice === "off") return null;
   if ((env.EVENTS_PROVIDER ?? "").toLowerCase() === "fake" && env.NODE_ENV !== "production") return fakeWebEvents();
   if (!env.GEMINI_API_KEY) return null;
-  return geminiWebEvents(env.GEMINI_API_KEY, env.GEMINI_MODEL || LATEST_FLASH);
+  return cachedWebEvents(geminiWebEvents(env.GEMINI_API_KEY, env.GEMINI_MODEL || LATEST_FLASH));
 }

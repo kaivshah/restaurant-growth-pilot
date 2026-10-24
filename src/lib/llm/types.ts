@@ -44,6 +44,14 @@ export interface CopyProvider {
   model: string;
   write(packet: FactsPacket, signal: AbortSignal): Promise<WriteResult>;
   rewrite?(packet: FactsPacket, current: OfferCopy, instruction: string, signal: AbortSignal): Promise<WriteResult>;
+  /** Several pitches from one restaurant in a single request (shared rules sent once) */
+  writeMany?(items: { id: string; packet: FactsPacket }[], signal: AbortSignal): Promise<BatchResult>;
+}
+
+export interface BatchResult {
+  items: (OfferCopy & { id: string })[];
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /**

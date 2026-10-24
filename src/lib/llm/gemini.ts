@@ -1,3 +1,4 @@
+import { db } from "@/lib/db";
 import { AiConfigError, ProviderError } from "./types";
 
 /**
@@ -94,10 +95,52 @@ export async function geminiGenerate(apiKey: string, model: string, req: GeminiR
 
 /**
  * Requests are spaced to stay under the free tier's per-minute limit
- * (GEMINI_RPM, default 10), shared by every job in this server. After a 429
- * the next request waits for the delay Google asked for.
+ * (GEMINI_RPM, default 10). The schedule lives in Postgres (RateSlot), so
+ * every web server and worker shares one limit; without a database it falls
+ * back to this process alone. After a 429 the next request waits for the
+ * delay Google asked for.
  */
 let nextSlot = 0;
+const SLOT = "gemini";
+const shared = () => !process.env.VITEST && process.env.RATE_SHARED !== "off";
+
+/** Books the next start time; returns how long to wait. */
+async function book(interval: number): Promise<number> {
+  if (shared()) {
+    try {
+      const ms = Math.round(interval);
+      const rows = await db.$queryRaw<{ wait: number }[]>`
+        INSERT INTO "RateSlot" (key, next) VALUES (${SLOT}, now() + ${ms}::int * interval '1 millisecond')
+        ON CONFLICT (key) DO UPDATE SET next = GREATEST("RateSlot".next, now()) + ${ms}::int * interval '1 millisecond'
+        RETURNING GREATEST(0, EXTRACT(EPOCH FROM ("RateSlot".next - ${ms}::int * interval '1 millisecond' - now())) * 1000)::float8 AS wait`;
+      return Number(rows[0]?.wait ?? 0);
+    } catch {
+      // No database (e.g. a script): pace this process only.
+    }
+  }
+  const now = Date.now();
+  const at = Math.max(now, nextSlot);
+  nextSlot = at + interval;
+  return at - now;
+}
+
+/** Gives back a booked turn that wasn't used, so waits don't pile up after timeouts. */
+async function release(interval: number) {
+  nextSlot = Math.max(Date.now(), nextSlot - interval);
+  if (shared()) {
+    const ms = Math.round(interval);
+    await db.$executeRaw`UPDATE "RateSlot" SET next = GREATEST(now(), next - ${ms}::int * interval '1 millisecond') WHERE key = ${SLOT}`.catch(() => {});
+  }
+}
+
+/** After a 429: nobody starts a request before Google's delay is over. */
+async function pushBack(ms: number) {
+  nextSlot = Math.max(nextSlot, Date.now() + ms);
+  if (shared()) {
+    const wait = Math.round(ms);
+    await db.$executeRaw`UPDATE "RateSlot" SET next = GREATEST(next, now() + ${wait}::int * interval '1 millisecond') WHERE key = ${SLOT}`.catch(() => {});
+  }
+}
 
 export function geminiInterval(env: NodeJS.ProcessEnv = process.env) {
   const rpm = Number(env.GEMINI_RPM ?? 10);
@@ -105,12 +148,10 @@ export function geminiInterval(env: NodeJS.ProcessEnv = process.env) {
 }
 
 async function waitForSlot(signal: AbortSignal) {
-  const now = Date.now();
-  const at = Math.max(now, nextSlot);
   const interval = geminiInterval();
-  nextSlot = at + interval;
-  if (at <= now) return;
-  const waitMs = at - now;
+  if (interval <= 0) return;
+  const waitMs = await book(interval);
+  if (waitMs <= 0) return;
   if (waitMs > 1500) console.log(`[gemini] waiting ${Math.round(waitMs / 1000)}s for the free per-minute limit (GEMINI_RPM=${Math.round(60_000 / interval)})`);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, waitMs);
@@ -118,8 +159,7 @@ async function waitForSlot(signal: AbortSignal) {
       "abort",
       () => {
         clearTimeout(timer);
-        // Give the unused turn back, so waits don't pile up after timeouts.
-        nextSlot = Math.max(Date.now(), nextSlot - interval);
+        void release(interval);
         reject(new Error("aborted"));
       },
       { once: true },
@@ -170,7 +210,7 @@ async function requestOnce(apiKey: string, model: string, req: GeminiRequest, si
   if (!res.ok) {
     const err = geminiError(res.status, body);
     // Honour Google's "retry in Ns" for the next request, up to a minute; longer waits make the job retry later.
-    if (err instanceof ProviderError && err.retryAfterMs) nextSlot = Math.max(nextSlot, Date.now() + Math.min(err.retryAfterMs, 60_000));
+    if (err instanceof ProviderError && err.retryAfterMs) await pushBack(Math.min(err.retryAfterMs, 60_000));
     throw err;
   }
   const out = body as GeminiResponse;

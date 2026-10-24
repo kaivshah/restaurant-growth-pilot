@@ -2,15 +2,7 @@
  * Checks the AI setup in .env with two small requests: one email draft and
  * one tool call, like the analyst makes. Run: npm run ai:check
  */
-import { existsSync, readFileSync } from "node:fs";
-
-function loadEnv(path = ".env") {
-  if (!existsSync(path)) return;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"]*)"?\s*$/);
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
-  }
-}
+import { loadEnv } from "./env";
 
 async function main() {
   loadEnv();

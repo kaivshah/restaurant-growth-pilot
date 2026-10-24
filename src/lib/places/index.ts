@@ -1,5 +1,6 @@
 import { ProviderError } from "@/lib/llm";
 import { parseRetryAfter, withRetry } from "@/lib/llm/retry";
+import { DAY, cacheKey, cached } from "@/lib/cache";
 import { type LatLng, boundingBox } from "@/lib/geo";
 
 export type LeadCategory = "office" | "coworking" | "school" | "clinic" | "gym" | "venue" | "other";
@@ -170,6 +171,24 @@ export function fakePlaces(): PlacesProvider {
   };
 }
 
+/**
+ * Google results shared across restaurants and processes. Places content is
+ * kept 7 days (Google allows up to 30); a nearby franchisee scanning the same
+ * area reuses it. Points are rounded to about 100 m so tiny address
+ * differences still hit the cache.
+ */
+export function cachedPlaces(inner: PlacesProvider): PlacesProvider {
+  const at = (p: LatLng, digits = 3) => [p.lat.toFixed(digits), p.lng.toFixed(digits)];
+  return {
+    name: inner.name,
+    geocode: (address) => cached(cacheKey("geocode", inner.name, address.trim().toLowerCase()), 30 * DAY, () => inner.geocode(address)),
+    search: (category, center, radiusMiles) => cached(cacheKey("places", inner.name, category, at(center), radiusMiles), 7 * DAY, () => inner.search(category, center, radiusMiles)),
+    findByName: inner.findByName
+      ? (name, center) => cached(cacheKey("place-name", inner.name, name.trim().toLowerCase(), at(center, 2)), 7 * DAY, () => inner.findByName!(name, center))
+      : undefined,
+  };
+}
+
 export function placesFromEnv(env: NodeJS.ProcessEnv = process.env): PlacesProvider | null {
   const choice = (env.PLACES_PROVIDER ?? "off").toLowerCase();
   if (choice === "google") {
@@ -177,7 +196,7 @@ export function placesFromEnv(env: NodeJS.ProcessEnv = process.env): PlacesProvi
       console.warn("PLACES_PROVIDER=google but GOOGLE_MAPS_API_KEY is not set; area scan is off.");
       return null;
     }
-    return googlePlaces(env.GOOGLE_MAPS_API_KEY);
+    return cachedPlaces(googlePlaces(env.GOOGLE_MAPS_API_KEY));
   }
   if (choice === "fake" && env.NODE_ENV !== "production") return fakePlaces();
   return null;

@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { enqueueDraftJob, processDraftJobs } from "@/lib/drafts";
+import { enqueueDraftJob, kickJobs } from "@/lib/drafts";
 import { REPORT_LABELS, parseReportFile } from "@/lib/reports";
 import type { ReportType } from "@/lib/reports";
 import { getRestaurant, requireRestaurant, requireUserId } from "@/lib/restaurant";
@@ -141,7 +141,7 @@ export async function confirmNumbers(formData: FormData) {
   if (flaggedTypes.size === 0 && restaurant.setupCompletedAt) {
     // Setup is already done, so new numbers mean fresh offer ideas.
     await enqueueDraftJob(restaurant.id);
-    after(() => processDraftJobs());
+    after(() => kickJobs());
   }
   redirect(flaggedTypes.size > 0 ? "/setup/reports?flagged=1" : "/setup/menu");
 }
@@ -172,6 +172,6 @@ export async function saveRules(_prev: FormState, formData: FormData): Promise<F
   // The area scan reuses a scan from the last day, so this only re-picks the pitches.
   await enqueueDraftJob(restaurant.id);
   await enqueueDraftJob(restaurant.id, "LEADS");
-  after(() => processDraftJobs());
+  after(() => kickJobs());
   redirect("/inbox");
 }

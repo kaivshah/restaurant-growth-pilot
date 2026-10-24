@@ -1,3 +1,4 @@
+import { HOUR, cacheKey, cached } from "@/lib/cache";
 import { ProviderError } from "@/lib/llm";
 import { parseRetryAfter, withRetry } from "@/lib/llm/retry";
 import type { LatLng } from "@/lib/geo";
@@ -187,11 +188,21 @@ export function fakeEvents(): EventsProvider {
   };
 }
 
+/** Event listings for an area and date range, shared for 6 hours. */
+export function cachedEvents(inner: EventsProvider): EventsProvider {
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  return {
+    name: inner.name,
+    upcoming: (center, radiusMiles, from, to) =>
+      cached(cacheKey("events", inner.name, center.lat.toFixed(2), center.lng.toFixed(2), radiusMiles, day(from), day(to)), 6 * HOUR, () => inner.upcoming(center, radiusMiles, from, to)),
+  };
+}
+
 /** Every events source turned on in the environment. EVENTS_PROVIDER=fake for local testing. */
 export function eventsFromEnv(env: NodeJS.ProcessEnv = process.env): EventsProvider[] {
   if ((env.EVENTS_PROVIDER ?? "").toLowerCase() === "fake" && env.NODE_ENV !== "production") return [fakeEvents()];
   const out: EventsProvider[] = [];
-  if (env.PREDICTHQ_API_KEY) out.push(predictHq(env.PREDICTHQ_API_KEY, env.PREDICTHQ_LOCATION_ID || undefined));
-  if (env.TICKETMASTER_API_KEY) out.push(ticketmaster(env.TICKETMASTER_API_KEY));
+  if (env.PREDICTHQ_API_KEY) out.push(cachedEvents(predictHq(env.PREDICTHQ_API_KEY, env.PREDICTHQ_LOCATION_ID || undefined)));
+  if (env.TICKETMASTER_API_KEY) out.push(cachedEvents(ticketmaster(env.TICKETMASTER_API_KEY)));
   return out;
 }

@@ -4,11 +4,11 @@ import { analystFromEnv, buildContext, estimateCostUsd, runLeadAnalysis } from "
 import type { EventInfo, LeadContext, LeadInfo, LeadOutcome, Pitch } from "@/lib/analyst";
 import { type ContactsProvider, QuotaError, contactsFromEnv } from "@/lib/contacts";
 import { db } from "@/lib/db";
-import { DAILY_DRAFT_CAP, draftsToday, json, logAnalysisCall, logCall, progress, usableReports } from "@/lib/drafts";
+import { DAILY_DRAFT_CAP, type PitchTarget, draftsToday, json, logAnalysisCall, logCall, progress, usableReports } from "@/lib/drafts";
 import { type LocalEvent, eventsFromEnv } from "@/lib/events";
 import { type WebEventsProvider, webEventsFromEnv } from "@/lib/events/web";
 import { type LatLng, domainOf, isUsefulDomain, milesBetween } from "@/lib/geo";
-import { AiBusyError, AiConfigError, type CopyProvider, type FactsPacket, type PitchFacts, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
+import { AiBusyError, AiConfigError, type CopyProvider, type FactsPacket, type PitchFacts, missingAiReason, providerFromEnv, writeManyCopy, writeOfferCopy } from "@/lib/llm";
 import { INDEPENDENT_LINE } from "@/lib/llm/validate";
 import { isBrandSafe } from "@/lib/offers";
 import { type Place, type PlacesProvider, SEARCHES, placesFromEnv } from "@/lib/places";
@@ -341,22 +341,45 @@ export async function draftPitch(
   p: Pitch,
   meta: PitchMeta,
 ): Promise<DraftResult> {
-  const contact = lead.contacts.find((c) => c.id === p.contact_id) ?? lead.contacts[0] ?? null;
-  const packet = pitchPacket(restaurant, lead, contact, event, p);
-  const factsHash = createHash("sha256").update(JSON.stringify({ packet, why: p.why, contact: contact?.id ?? null })).digest("hex");
-  const same = await db.draft.findUnique({ where: { restaurantId_factsHash: { restaurantId: restaurant.id, factsHash } } });
-  if (same) return { kind: "reused", draftId: same.id };
-  // A decided pitch for this lead stays decided; only waiting ones are replaced.
-  if (await db.draft.findFirst({ where: { leadId: lead.id, status: { in: ["APPROVED", "SKIPPED"] } } })) return { kind: "decided" };
-
-  const copy = await writeOfferCopy(provider, packet);
+  const planned = await planPitch(restaurant, lead, event, p, meta);
+  if (planned.kind !== "plan") return planned;
+  const copy = await writeOfferCopy(provider, planned.plan.packet);
   await logCall(restaurant.id, copy.log);
   if (!copy.ok) {
     if (copy.fatal) throw new AiConfigError(copy.message);
     if (copy.retryable) throw new AiBusyError(copy.message, copy.retryAfterMs);
     return { kind: "failed", message: copy.message };
   }
-  await db.draft.deleteMany({ where: { leadId: lead.id, status: "PENDING" } });
+  return { kind: "created", draftId: await savePitch(restaurant, planned.plan, copy) };
+}
+
+export interface PitchPlan {
+  lead: Lead & { contacts: Contact[] };
+  event: EventRow | null;
+  p: Pitch;
+  meta: PitchMeta;
+  contact: Contact | null;
+  packet: FactsPacket;
+  factsHash: string;
+}
+
+/** Everything a pitch needs except the copy; or why there's nothing to write. */
+export async function planPitch(restaurant: Restaurant, lead: Lead & { contacts: Contact[] }, event: EventRow | null, p: Pitch, meta: PitchMeta): Promise<{ kind: "plan"; plan: PitchPlan } | DraftResult> {
+  const contact = lead.contacts.find((c) => c.id === p.contact_id) ?? lead.contacts[0] ?? null;
+  const packet = pitchPacket(restaurant, lead, contact, event, p);
+  const factsHash = createHash("sha256").update(JSON.stringify({ packet, why: p.why, contact: contact?.id ?? null })).digest("hex");
+  // The same facts are never written twice.
+  const same = await db.draft.findUnique({ where: { restaurantId_factsHash: { restaurantId: restaurant.id, factsHash } } });
+  if (same) return { kind: "reused", draftId: same.id };
+  // A decided pitch stays decided; only waiting ones are replaced.
+  if (await db.draft.findFirst({ where: { leadId: lead.id, eventId: event?.id ?? null, status: { in: ["APPROVED", "SKIPPED"] } } })) return { kind: "decided" };
+  return { kind: "plan", plan: { lead, event, p, meta, contact, packet, factsHash } };
+}
+
+/** Saves a written pitch as a draft in the inbox. */
+export async function savePitch(restaurant: Restaurant, plan: PitchPlan, copy: { copy: { headline: string; body: string }; writtenBy: string }): Promise<string> {
+  const { lead, event, p, meta, contact, packet, factsHash } = plan;
+  await db.draft.deleteMany({ where: { leadId: lead.id, eventId: event?.id ?? null, status: "PENDING" } });
   const checks = [
     p.offer === "free_delivery" ? "Free delivery, no price cut" : "Free extra, no price cut",
     `Within your ${restaurant.radiusMiles} mi radius`,
@@ -400,7 +423,7 @@ export async function draftPitch(
     },
   });
   if (lead.status === "NEW") await db.lead.update({ where: { id: lead.id }, data: { status: "DRAFTED" } });
-  return { kind: "created", draftId: draft.id };
+  return draft.id;
 }
 
 export function contactLabel(contact: Pick<Contact, "name" | "email" | "role"> | null) {
@@ -498,29 +521,25 @@ export async function latestSuggestions(restaurantId: string) {
   return { runId: run?.id ?? null, at: run?.createdAt ?? null, byLead: new Map(list.map((x) => [x.leadId, x])) };
 }
 
-export type GenerateResult = { ok: true; draftId: string; note?: string } | { ok: false; error: string };
+type Prepared = { kind: "plan"; plan: PitchPlan; note?: string } | { kind: "existing"; draftId: string } | { kind: "error"; error: string };
 
 /**
- * "Generate pitch" on a business or an event: finds who to contact (the
- * venue or organiser for an event), looks up a contact with Hunter if there
- * isn't one yet, and writes one pitch email with the AI.
+ * Gets one requested pitch ready to write: finds who to contact (the
+ * business, or an event's venue or organiser), looks up a contact with
+ * Hunter if there isn't one yet, and builds the facts. No AI here.
  */
-export async function generatePitch(restaurant: Restaurant, target: { leadId?: string; eventId?: string }, now = new Date()): Promise<GenerateResult> {
-  const provider = providerFromEnv();
-  if (!provider) return { ok: false, error: `AI isn't set up. ${missingAiReason()}` };
+async function preparePitch(restaurant: Restaurant, target: PitchTarget, suggestions: Awaited<ReturnType<typeof latestSuggestions>>, now: Date): Promise<Prepared> {
   const offerDefault = restaurant.allowFreeExtra ? "free_cookie_platter" : restaurant.allowFreeDelivery ? "free_delivery" : null;
-
   const event = target.eventId ? await db.event.findFirst({ where: { id: target.eventId, restaurantId: restaurant.id } }) : null;
-  if (target.eventId && !event) return { ok: false, error: "This event is no longer in your list." };
+  if (target.eventId && !event) return { kind: "error", error: "This event is no longer in your list." };
   let leadId = target.leadId ?? event?.venueLeadId ?? null;
   if (!leadId && event) leadId = (await leadForEvent(restaurant, event)).id;
   const lead = leadId ? await db.lead.findFirst({ where: { id: leadId, restaurantId: restaurant.id }, include: { contacts: { orderBy: { createdAt: "asc" } } } }) : null;
-  if (!lead) return { ok: false, error: "This business is no longer in your list." };
-  if (lead.status === "EXCLUDED") return { ok: false, error: `${lead.name} is excluded. Include it again first.` };
+  if (!lead) return { kind: "error", error: "This business is no longer in your list." };
+  if (lead.status === "EXCLUDED") return { kind: "error", error: `${lead.name} is excluded. Include it again first.` };
 
   const existing = await db.draft.findFirst({ where: { leadId: lead.id, eventId: event?.id ?? null, status: { in: ["PENDING", "APPROVED"] } } });
-  if (existing) return { ok: true, draftId: existing.id, note: "This already has a pitch." };
-  if ((await draftsToday(restaurant.id)) >= DAILY_DRAFT_CAP) return { ok: false, error: `You've reached today's limit of ${DAILY_DRAFT_CAP} drafts (DAILY_DRAFT_CAP).` };
+  if (existing) return { kind: "existing", draftId: existing.id };
 
   // A contact first, so the email can greet the right person.
   let note: string | undefined;
@@ -531,39 +550,91 @@ export async function generatePitch(restaurant: Restaurant, target: { leadId?: s
     try {
       const { best } = await lookupContacts(lead.id, domain, contacts, now);
       if (best) lead.contacts.push(best);
-      else note = `No contact found at ${domain}; add one before sending.`;
+      else note = `no contact found at ${domain}`;
     } catch (err) {
-      note = err instanceof QuotaError ? `Contact lookup paused: ${short(err.message)}` : "Contact lookup failed; add a contact by hand.";
+      note = err instanceof QuotaError ? `contact lookup paused (${short(err.message, 80)})` : "contact lookup failed";
     }
   } else if (lead.contacts.length === 0) {
-    note = "No contact yet; add one before sending.";
+    note = `no contact yet for ${lead.name}`;
   }
 
-  const suggestion = (await latestSuggestions(restaurant.id)).byLead.get(lead.id);
-  const useAi = suggestion && (suggestion.eventId ?? null) === (event?.id ?? null);
-  const offer = useAi ? suggestion.offer : offerDefault;
-  if (!offer) return { ok: false, error: "Your rules don't allow a free extra or free delivery, so there's no offer to make. Change this in Settings." };
+  const suggestion = suggestions.byLead.get(lead.id);
+  const ai = suggestion && (suggestion.eventId ?? null) === (event?.id ?? null) ? suggestion : null;
+  const offer = ai ? ai.offer : offerDefault;
+  if (!offer) return { kind: "error", error: "Your rules don't allow a free extra or free delivery, so there's no offer to make." };
   const pitch: Pitch = {
     lead_id: lead.id,
     contact_id: lead.contacts[0]?.id,
     event_id: event?.id,
     offer,
-    occasion: useAi ? suggestion.occasion : event ? `Staff and attendee lunches for ${event.title}` : "Team lunches",
-    why: useAi ? suggestion.why : (event ? event.scoreReasons : lead.scoreReasons).join(". "),
-    confidence: useAi ? (suggestion.confidence as Pitch["confidence"]) : "medium",
+    occasion: ai ? ai.occasion : event ? `Staff and attendee lunches for ${event.title}` : "Team lunches",
+    why: ai ? ai.why : (event ? event.scoreReasons : lead.scoreReasons).join(". "),
+    confidence: ai ? (ai.confidence as Pitch["confidence"]) : "medium",
     evidence: [],
   };
-  const runId = useAi ? (await latestSuggestions(restaurant.id)).runId : null;
-  try {
-    const res = await draftPitch(restaurant, provider, lead, event, pitch, useAi ? { source: "AI_ANALYST", analysisRunId: runId, toolLog: [], citations: suggestion.citations } : { source: "RULES", analysisRunId: null, toolLog: [] });
-    if (res.kind === "failed") return { ok: false, error: `The AI couldn't write a pitch that passes the checks: ${short(res.message)}` };
-    if (res.kind === "decided") return { ok: false, error: `You already decided on a pitch to ${lead.name}. Undo it in the inbox to write a new one.` };
-    return { ok: true, draftId: res.draftId, note };
-  } catch (err) {
-    if (err instanceof AiBusyError) return { ok: false, error: `The AI is busy (${short(err.message)}). Try again in a few minutes.` };
-    if (err instanceof AiConfigError) return { ok: false, error: err.message };
-    throw err;
+  const meta: PitchMeta = ai ? { source: "AI_ANALYST", analysisRunId: suggestions.runId, toolLog: [], citations: ai.citations } : { source: "RULES", analysisRunId: null, toolLog: [] };
+  const planned = await planPitch(restaurant, lead, event, pitch, meta);
+  if (planned.kind === "plan") return { ...planned, note };
+  if (planned.kind === "decided") return { kind: "error", error: `You already decided on a pitch to ${lead.name}.` };
+  if (planned.kind === "reused" || planned.kind === "created") return { kind: "existing", draftId: planned.draftId };
+  return { kind: "error", error: planned.message };
+}
+
+/**
+ * One PITCH job: writes every pitch the owner asked for. All of them are
+ * prepared first, then written in batches (up to 8 per AI request, with the
+ * shared rules sent once), then saved. If the AI is busy, pitches already
+ * written are kept and the job tries the rest later.
+ */
+export async function generatePitches(restaurantId: string, targets: PitchTarget[], now = new Date()): Promise<string> {
+  const restaurant = await db.restaurant.findUnique({ where: { id: restaurantId } });
+  if (!restaurant) return "Restaurant not found.";
+  const provider = providerFromEnv();
+  if (!provider) throw new AiConfigError(`AI isn't set up. ${missingAiReason()}`);
+
+  const suggestions = await latestSuggestions(restaurantId);
+  const plans: { plan: PitchPlan; note?: string }[] = [];
+  const problems: string[] = [];
+  let existing = 0;
+  for (const [i, target] of targets.entries()) {
+    await progress(restaurantId, "PITCH", `Getting pitch ${i + 1} of ${targets.length} ready…`);
+    const prepared = await preparePitch(restaurant, target, suggestions, now);
+    if (prepared.kind === "plan") plans.push(prepared);
+    else if (prepared.kind === "existing") existing++;
+    else problems.push(prepared.error);
   }
+  const room = Math.max(0, DAILY_DRAFT_CAP - (await draftsToday(restaurantId)));
+  if (plans.length > room) problems.push(`${plans.length - room} not written: today's limit of ${DAILY_DRAFT_CAP} drafts`);
+  const toWrite = plans.slice(0, room);
+
+  let written = 0;
+  if (toWrite.length) {
+    const requests = Math.ceil(toWrite.length / 8);
+    await progress(restaurantId, "PITCH", `Writing ${toWrite.length} ${toWrite.length === 1 ? "pitch" : "pitches"} (${requests} AI ${requests === 1 ? "request" : "requests"})…`);
+    const results = await writeManyCopy(provider, toWrite.map(({ plan }, i) => ({ id: `p${i + 1}`, packet: plan.packet })));
+    let busy: { message: string; retryAfterMs?: number } | null = null;
+    for (const [i, { plan }] of toWrite.entries()) {
+      const copy = results.get(`p${i + 1}`)!;
+      await logCall(restaurantId, copy.log);
+      if (copy.ok) {
+        await savePitch(restaurant, plan, copy);
+        written++;
+      } else if (copy.fatal) throw new AiConfigError(copy.message);
+      else if (copy.retryable) busy = { message: copy.message, retryAfterMs: copy.retryAfterMs };
+      else problems.push(`${plan.lead.name}: ${short(copy.message, 100)}`);
+    }
+    // Written pitches are saved; the job retries the rest when the AI is free again.
+    if (busy) throw new AiBusyError(busy.message, busy.retryAfterMs);
+  }
+  const notes = plans.map((x) => x.note).filter(Boolean);
+  return [
+    `Wrote ${written} ${written === 1 ? "pitch" : "pitches"}`,
+    existing ? `${existing} already had one` : "",
+    notes.length ? `check contacts: ${notes.join("; ")}` : "",
+    ...problems,
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 /** The business to pitch for an event with no known venue: found on Google by name, or made from the event itself. */
