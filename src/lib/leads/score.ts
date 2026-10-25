@@ -42,7 +42,10 @@ export function scoreLead(p: Place, distanceMiles: number, radiusMiles: number):
 
 const EVENT_WEIGHT: Record<string, number> = { conference: 35, expo: 35, corporate: 35, sports: 25, community: 20, school: 20, concert: 8, other: 10 };
 
-/** Events worth reaching out about: inside the radius and 7–60 days ahead. */
+/** Fewer days than this and there's no time to arrange catering at all. */
+export const MIN_EVENT_DAYS = 2;
+
+/** Events worth reaching out about: inside the radius and 2–60 days ahead (under a week is short notice). */
 export function scoreEvent(
   e: LocalEvent,
   distanceMiles: number | null,
@@ -50,7 +53,7 @@ export function scoreEvent(
   now = new Date(),
 ): { score: number; reasons: string[]; excluded: string | null } {
   const days = Math.round((e.startsAt.getTime() - now.getTime()) / 86_400_000);
-  if (days < 7) return { score: 0, reasons: [`Starts in ${days} days, too soon to arrange catering`], excluded: "Too soon" };
+  if (days < MIN_EVENT_DAYS) return { score: 0, reasons: [`Starts in ${days} days, too soon to arrange catering`], excluded: "Too soon" };
   if (days > 60) return { score: 0, reasons: [`Starts in ${days} days`], excluded: "Too far ahead" };
   if (distanceMiles !== null && distanceMiles > radiusMiles) return { score: 0, reasons: [`${distanceMiles} mi away`], excluded: "Outside the delivery radius" };
 
@@ -60,7 +63,11 @@ export function scoreEvent(
     score += Math.min(35, Math.round(Math.log10(e.attendance) * 11));
     reasons.push(`About ${e.attendance.toLocaleString("en-US")} expected`);
   }
-  score += days >= 14 && days <= 42 ? 15 : 5;
+  // 2–6 weeks ahead is the sweet spot; under a week is possible but rushed.
+  if (days < 7) {
+    score -= 10;
+    reasons.push(`Short notice: only ${days} days away`);
+  } else score += days >= 14 && days <= 42 ? 15 : 5;
   if (distanceMiles !== null) {
     score += Math.round(15 * (1 - distanceMiles / radiusMiles));
     reasons.push(`${distanceMiles} mi away`);

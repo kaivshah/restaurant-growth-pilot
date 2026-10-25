@@ -79,7 +79,10 @@ describe("event scoring", () => {
   });
 
   it("only keeps events 7–60 days ahead and inside the radius", () => {
-    expect(scoreEvent(ev(3), 1, 3, now).excluded).toBe("Too soon");
+    expect(scoreEvent(ev(1), 1, 3, now).excluded).toBe("Too soon");
+    expect(scoreEvent(ev(3), 1, 3, now).excluded).toBeNull();
+    expect(scoreEvent(ev(3), 1, 3, now).reasons).toContain("Short notice: only 3 days away");
+    expect(scoreEvent(ev(3), 1, 3, now).score).toBeLessThan(scoreEvent(ev(21), 1, 3, now).score);
     expect(scoreEvent(ev(75), 1, 3, now).excluded).toBe("Too far ahead");
     expect(scoreEvent(ev(21), 5, 3, now).excluded).toBe("Outside the delivery radius");
     expect(scoreEvent(ev(21), 1, 3, now).excluded).toBeNull();
@@ -196,7 +199,7 @@ function leadCtx(over: { rules?: Partial<LeadContext["rules"]>; status?: LeadCon
     ],
     events: [
       { id: "E1", title: "Biotech Summit", category: "conference", date: "2026-11-14", daysAhead: 21, venueName: "Black Mountain Event Hall", venueLeadId: "L2", attendance: 1200, distanceMiles: 1.7, fitScore: 80, reasons: [] },
-      { id: "E2", title: "Market", category: "community", date: "2026-10-27", daysAhead: 3, venueName: null, venueLeadId: null, attendance: 400, distanceMiles: 0.2, fitScore: 30, reasons: [] },
+      { id: "E2", title: "Market", category: "community", date: "2026-10-25", daysAhead: 1, venueName: null, venueLeadId: null, attendance: 400, distanceMiles: 0.2, fitScore: 30, reasons: [] },
     ],
   };
 }

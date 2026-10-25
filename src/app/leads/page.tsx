@@ -29,7 +29,12 @@ const fmtDay = (d: Date) => d.toLocaleDateString("en-US", { weekday: "short", mo
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const pick = (v: string | undefined, allowed: string[], fallback: string) => (v && allowed.includes(v) ? v : fallback);
 
-type Params = { view?: string; type?: string; within?: string; days?: string; sort?: string; status?: string; q?: string };
+type Params = { view?: string; type?: string; within?: string; days?: string; from?: string; to?: string; sort?: string; status?: string; q?: string };
+
+const DAY_MS = 86_400_000;
+/** "2026-11-14" → that day in San Diego (noon UTC is safely inside it), or null. */
+const dateParam = (v?: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v)) ? v : null);
+const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
 const primaryBtn = "min-h-11 w-full rounded-field bg-primary px-4 font-bold text-white hover:bg-primary-hover disabled:opacity-60";
 const field = "h-11 rounded-field border border-field bg-surface px-3 text-sm";
@@ -49,7 +54,16 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   ]);
   const view = pick(params.view, ["events", "businesses"], eventCount > 0 ? "events" : "businesses");
   const within = pick(params.within, ["1", "2", "3", "5", "10", "any"], "any");
-  const days = pick(params.days, ["7", "14", "30", "60"], "60");
+  const days = pick(params.days, ["7", "14", "28", "60", "custom"], "60");
+  const from = dateParam(params.from);
+  const to = dateParam(params.to);
+  // Custom dates: whole days from "from" through "to"; otherwise from now for the chosen weeks.
+  // Filling in either date means "use these dates", whatever the dropdown says.
+  const custom = days === "custom" || Boolean(from || to);
+  const window =
+    custom
+      ? { gte: from ? new Date(`${from}T00:00:00-08:00`) : now, lte: to ? new Date(`${to}T23:59:59-08:00`) : new Date(now.getTime() + 60 * DAY_MS) }
+      : { gte: now, lte: new Date(now.getTime() + Number(days) * DAY_MS) };
   const q = (params.q ?? "").trim().slice(0, 80);
   const eventType = pick(params.type, EVENT_TYPES, "");
   const leadType = pick(params.type, LEAD_TYPES, "");
@@ -59,7 +73,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
 
   const eventWhere: Prisma.EventWhereInput = {
     restaurantId: restaurant.id,
-    startsAt: { gte: now, lte: new Date(now.getTime() + Number(days) * 86_400_000) },
+    startsAt: { gte: window.gte < now ? now : window.gte, lte: window.lte },
     ...(eventType ? { category: eventType } : {}),
     ...near,
     ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" } }, { venueName: { contains: q, mode: "insensitive" } }, { organizer: { contains: q, mode: "insensitive" } }] } : {}),
@@ -212,15 +226,29 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           </select>
         </label>
         {view === "events" ? (
-          <label className="flex flex-col gap-1 text-[13px] font-bold text-muted">
-            When
-            <select name="days" defaultValue={days} className={field}>
-              <option value="7">Next 7 days</option>
-              <option value="14">Next 2 weeks</option>
-              <option value="30">Next 30 days</option>
-              <option value="60">Next 60 days</option>
-            </select>
-          </label>
+          <>
+            <label className="flex flex-col gap-1 text-[13px] font-bold text-muted">
+              Coming up
+              <select name="days" defaultValue={days} className={field}>
+                <option value="7">In the next week</option>
+                <option value="14">In the next 2 weeks</option>
+                <option value="28">In the next 4 weeks</option>
+                <option value="60">In the next 60 days</option>
+                <option value="custom">Custom dates</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[13px] font-bold text-muted">
+              From
+              <input type="date" name="from" defaultValue={from ?? ""} min={ymd(now)} className={field} aria-describedby="custom-hint" />
+            </label>
+            <label className="flex flex-col gap-1 text-[13px] font-bold text-muted">
+              To
+              <input type="date" name="to" defaultValue={to ?? ""} min={ymd(now)} max={ymd(new Date(now.getTime() + 60 * DAY_MS))} className={field} aria-describedby="custom-hint" />
+            </label>
+            <p id="custom-hint" className="sr-only">
+              Filling in a date uses those dates instead of the period above.
+            </p>
+          </>
         ) : (
           <label className="flex flex-col gap-1 text-[13px] font-bold text-muted">
             Show
@@ -269,6 +297,12 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </button>
       </div>
 
+      {view === "events" && (
+        <p className="text-sm text-muted">
+          {events.length} {events.length === 1 ? "event" : "events"} between {fmtDay(window.gte < now ? now : window.gte)} and {fmtDay(window.lte)}
+          {custom ? " (custom dates)" : ""}. Events less than a week away are marked short notice.
+        </p>
+      )}
       {view === "events" ? (
         events.length === 0 ? (
           <Card className="p-6 text-ink-2">

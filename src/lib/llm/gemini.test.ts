@@ -162,3 +162,45 @@ describe("pacing for the free tier", () => {
     expect(geminiInterval({ GEMINI_RPM: "0" } as unknown as NodeJS.ProcessEnv)).toBe(0);
   });
 });
+
+describe("Gemini daily quota", () => {
+  const dailyBody = {
+    error: {
+      code: 429,
+      status: "RESOURCE_EXHAUSTED",
+      message: "You exceeded your current quota.",
+      details: [
+        { "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests", quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue: "20" }] },
+        { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "43s" },
+      ],
+    },
+  };
+
+  it("reads the daily limit Google reports", async () => {
+    const { GeminiQuotaError } = await import("./gemini");
+    const err = geminiError(429, dailyBody);
+    expect(err).toBeInstanceOf(GeminiQuotaError);
+    expect(err).toMatchObject({ perDay: true, limit: 20, retryable: true });
+    const minute = geminiError(429, { error: { code: 429, message: "slow down", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaId: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", quotaValue: "10" }] }] } });
+    expect(minute).toMatchObject({ perDay: false, limit: 10 });
+  });
+
+  it("stops sending once the day is used up, without calling Google again", async () => {
+    const { clearUsageMemory } = await import("./usage");
+    clearUsageMemory();
+    const fetchMock = vi.fn(async () => reply(dailyBody, 429));
+    vi.stubGlobal("fetch", fetchMock);
+    const p = geminiProvider("key", "gemini-3.8-flash");
+    await expect(p.write(packet, new AbortController().signal)).rejects.toMatchObject({ perDay: true });
+    await expect(p.write(packet, new AbortController().signal)).rejects.toThrow(/paused/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    clearUsageMemory();
+  });
+
+  it("knows the Pacific day and the next reset", async () => {
+    const { pacificDay, nextPacificMidnight } = await import("./usage");
+    const at = new Date("2026-10-25T06:30:00Z"); // 11:30 pm on Oct 24 in San Diego (PDT)
+    expect(pacificDay(at)).toBe("2026-10-24");
+    expect(nextPacificMidnight(at).toISOString()).toBe("2026-10-25T07:00:00.000Z");
+  });
+});

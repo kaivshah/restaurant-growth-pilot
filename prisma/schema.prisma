@@ -450,3 +450,18 @@ model RateSlot {
   /// The earliest time the next request may start
   next DateTime
 }
+
+/// Requests to a metered API per day (Pacific time, when Google's free
+/// quotas reset), and the limit learned from the provider's own error reply.
+model ApiUsage {
+  /// e.g. "gemini:2026-10-25"
+  key            String    @id
+  provider       String
+  day            String
+  count          Int       @default(0)
+  /// The daily limit Google reported in a "quota exceeded" reply, if any
+  limit          Int?
+  /// No requests before this time (the daily quota is used up)
+  exhaustedUntil DateTime?
+  updatedAt      DateTime  @updatedAt
+}

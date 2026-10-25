@@ -227,7 +227,7 @@ export function checkPitch(p: Pitch, ctx: LeadContext, log: ToolLog): string[] {
     const ev = ctx.events.find((e) => e.id === p.event_id);
     if (!ev) problems.push(`There is no event ${p.event_id}.`);
     else {
-      if (ev.daysAhead < 7) problems.push(`${ev.title} is too soon to arrange catering.`);
+      if (ev.daysAhead < 2) problems.push(`${ev.title} is too soon to arrange catering.`);
       if (ev.venueLeadId !== lead.id) problems.push(`${lead.name} isn't the venue for ${ev.title}.`);
     }
   }

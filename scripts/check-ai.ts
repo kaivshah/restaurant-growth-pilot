@@ -47,4 +47,24 @@ async function main() {
   }
 }
 
-main().then(() => process.exit(0));
+/** What the app sent to the AI today, from its own logs. */
+async function usageReport() {
+  const { usageToday, nextPacificMidnight } = await import("@/lib/llm/usage");
+  const { db } = await import("@/lib/db");
+  try {
+    const u = await usageToday("gemini");
+    const since = new Date(Date.now() - 24 * 3_600_000);
+    const byPurpose = await db.llmCall.groupBy({ by: ["purpose"], where: { provider: "gemini", createdAt: { gte: since } }, _count: true, _sum: { attempts: true } });
+    console.log(`\nGemini requests today (Pacific day ${u.day}): ${u.count}${u.limit ? ` of ${u.limit} (limit reported by Google)` : " (limit not reported yet)"}`);
+    if (u.exhaustedUntil && u.exhaustedUntil > new Date()) console.log(`Paused until ${nextPacificMidnight().toISOString()}: the daily quota is used up.`);
+    for (const row of byPurpose) console.log(`  ${row.purpose.padEnd(14)} ${row._count} calls, ${row._sum.attempts ?? 0} requests incl. retries (last 24 h)`);
+  } catch {
+    console.log("\n(Usage needs the database: start Postgres to see today's counts.)");
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+main()
+  .then(usageReport)
+  .then(() => process.exit(0));

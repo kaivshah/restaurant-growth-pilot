@@ -50,7 +50,8 @@ export interface LoopConfig<C, S> {
 export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, S>): Promise<LoopResult<S>> {
   const limits = cfg.limits ?? {};
   const maxToolCalls = limits.maxToolCalls ?? 12;
-  const maxTurns = limits.maxTurns ?? 16;
+  // Each turn is one AI request; on a free tier a short budget matters more than a long exploration.
+  const maxTurns = limits.maxTurns ?? Number(process.env.ANALYST_MAX_TURNS ?? 10);
   const maxInputTokens = limits.maxInputTokens ?? 400_000;
   const byName = new Map(cfg.tools.map((t) => [t.name, t]));
   const out: LoopResult<S> = { status: "FAILED", toolLog: [], toolCalls: 0, turns: 0, inputTokens: 0, outputTokens: 0 };

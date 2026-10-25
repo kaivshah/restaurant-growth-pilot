@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { AiConfigError, ProviderError } from "./types";
+import { countRequest, dailyBlock, markExhausted } from "./usage";
 
 /**
  * Minimal client for the Gemini API (generateContent). Free keys come from
@@ -25,10 +26,36 @@ export type GeminiResponse = {
 const base = () => (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
 
 /** Turns a Gemini error reply into a ProviderError the retry loop understands. */
+/** A 429 that says which quota ran out: the per-day one means stop until midnight Pacific. */
+export class GeminiQuotaError extends ProviderError {
+  constructor(
+    message: string,
+    retryAfterMs: number | undefined,
+    readonly perDay: boolean,
+    readonly limit: number | null,
+  ) {
+    super(message, true, retryAfterMs);
+  }
+}
+
+type QuotaViolation = { quotaId?: string; quotaMetric?: string; quotaValue?: string | number };
+type ErrorDetail = { "@type"?: string; retryDelay?: string; violations?: QuotaViolation[] };
+
 export function geminiError(status: number, body: unknown): ProviderError | AiConfigError {
-  const err = (body as { error?: { message?: string; status?: string; details?: { "@type"?: string; retryDelay?: string }[] } })?.error;
+  const err = (body as { error?: { message?: string; status?: string; details?: ErrorDetail[] } })?.error;
   const message = err?.message?.slice(0, 300) ?? `HTTP ${status}`;
-  if (status === 429 || status >= 500) {
+  if (status === 429) {
+    const delay = err?.details?.find((d) => d["@type"]?.endsWith("RetryInfo"))?.retryDelay;
+    const seconds = delay ? parseFloat(delay) : NaN;
+    // QuotaFailure names the quota, e.g. "GenerateRequestsPerDayPerProjectPerModel-FreeTier", limit "20".
+    const violations = err?.details?.flatMap((d) => (d["@type"]?.endsWith("QuotaFailure") ? (d.violations ?? []) : [])) ?? [];
+    const daily = violations.find((v) => /PerDay/i.test(`${v.quotaId ?? ""} ${v.quotaMetric ?? ""}`));
+    const raw = Number(daily?.quotaValue ?? violations[0]?.quotaValue);
+    const limit = Number.isFinite(raw) ? raw : null;
+    if (daily) return new GeminiQuotaError(`Gemini's free daily limit${limit ? ` of ${limit} requests` : ""} is used up; it resets at midnight Pacific`, undefined, true, limit);
+    return new GeminiQuotaError(`Gemini free limit reached (per minute): ${message}`, Number.isFinite(seconds) ? seconds * 1000 : undefined, false, limit);
+  }
+  if (status >= 500) {
     const delay = err?.details?.find((d) => d["@type"]?.endsWith("RetryInfo"))?.retryDelay;
     const seconds = delay ? parseFloat(delay) : NaN;
     const busy = status === 429 ? "Gemini free limit reached" : `Gemini unavailable (${status})`;
@@ -80,6 +107,9 @@ export interface GeminiRequest {
  * (or the latest Flash) and keeps using it.
  */
 export async function geminiGenerate(apiKey: string, model: string, req: GeminiRequest, signal: AbortSignal): Promise<GeminiResponse> {
+  // Daily quota used up: don't send anything (each attempt would just fail); the job waits for the reset.
+  const blocked = await dailyBlock("gemini");
+  if (blocked) throw new ProviderError(`Gemini paused: ${blocked.message}`, true, blocked.waitMs);
   try {
     return await generateWith(apiKey, resolvedModel(model), req, signal);
   } catch (err) {
@@ -207,8 +237,15 @@ async function requestOnce(apiKey: string, model: string, req: GeminiRequest, si
     throw new ProviderError("Can't reach the Gemini API. Check your internet connection.", true);
   }
   const body = safeJson(await res.text());
+  // Count what Google counts: every request it processed (a 429 is a rejection, not a use).
+  if (res.status !== 429) await countRequest("gemini");
   if (!res.ok) {
     const err = geminiError(res.status, body);
+    if (err instanceof GeminiQuotaError && err.perDay) {
+      await markExhausted("gemini", err.limit);
+      const { waitMs } = (await dailyBlock("gemini")) ?? { waitMs: 3_600_000 };
+      throw new GeminiQuotaError(err.message, waitMs, true, err.limit);
+    }
     // Honour Google's "retry in Ns" for the next request, up to a minute; longer waits make the job retry later.
     if (err instanceof ProviderError && err.retryAfterMs) await pushBack(Math.min(err.retryAfterMs, 60_000));
     throw err;
