@@ -47,6 +47,8 @@ The cache (`src/lib/cache`) has two tiers: an in-process LRU (500 entries) for r
 
 Approved pitches become `OutboundEmail` rows (first email + two follow-ups) with a send time from `nextSendSlot` (weekday mornings Pacific, spaced, daily cap). Every worker pass runs `runOutreach`: it claims due emails with `FOR UPDATE SKIP LOCKED`, re-checks the do-not-contact list and the deal's stage, sends through the Gmail API (follow-ups thread with `In-Reply-To`), and every 10 minutes reads the threads it started to record replies and bounces. Gmail tokens are encrypted (AES-256-GCM, key from `AUTH_SECRET`); unsubscribe links are HMAC-signed.
 
+Customer offers use the same path with their own table, `CustomerEmail`: "Send to customers" creates one `OfferCode` and one email per person in a single pass (`createMany`, unique on offer + customer, so pressing twice can't double-send), with send times any day 10 am–7 pm Pacific, a minute apart, under `customerDailyCap`. The same `runOutreach` pass claims them with `FOR UPDATE SKIP LOCKED`. Redeeming is one conditional update (`WHERE redeemedAt IS NULL`), so a code can't be used twice.
+
 ## Rate limits
 
 - Every Gemini request is counted per Pacific day (`ApiUsage`). The daily limit is read from Google's `QuotaFailure` reply (or set with `GEMINI_RPD`); once it's used up nothing more is sent until midnight Pacific and waiting jobs resume then, instead of retries burning failed requests.

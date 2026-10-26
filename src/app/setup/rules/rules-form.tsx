@@ -115,7 +115,7 @@ export function RulesForm({ defaults, discountPct }: { defaults: Defaults; disco
         <div className="flex flex-col gap-2 border-t border-sand pt-6">
           <p className="font-bold">Send from your own email</p>
           <p className="text-sm text-muted">
-            Connecting Gmail or Outlook comes with catering outreach in a later update. Nothing will ever be sent until you approve it.
+            Connect Gmail on the Email sending page after setup. Nothing will ever be sent until you approve it.
           </p>
         </div>
 

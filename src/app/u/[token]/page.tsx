@@ -33,7 +33,7 @@ export default async function UnsubscribePage({ params, searchParams }: { params
         ) : (
           <>
             <h1 className="text-2xl font-extrabold">Unsubscribe from {restaurant.name}?</h1>
-            <p className="text-ink-2">We&apos;ll stop emailing {who.email} about catering. This takes effect right away.</p>
+            <p className="text-ink-2">We&apos;ll stop emailing {who.email}. This takes effect right away.</p>
             <form action={confirm}>
               <button type="submit" className="min-h-12 w-full rounded-field bg-primary px-5 font-bold text-white hover:bg-primary-hover">
                 Unsubscribe

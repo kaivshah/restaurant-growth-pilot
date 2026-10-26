@@ -6,6 +6,8 @@ const NAV = [
   { href: "/inbox", label: "Approval Inbox", key: "inbox" },
   { href: "/leads", label: "Leads & events", key: "leads" },
   { href: "/pipeline", label: "Pipeline", key: "pipeline" },
+  { href: "/customers", label: "Customers", key: "customers" },
+  { href: "/redeem", label: "Redeem a code", key: "redeem" },
   { href: "/setup/reports", label: "Reports", key: "reports" },
   { href: "/setup/rules", label: "Settings", key: "settings" },
   { href: "/settings/email", label: "Email sending", key: "email" },

@@ -26,6 +26,17 @@ Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 
 **Switching to Claude:** set `LLM_PROVIDER="anthropic"`, `ANALYST_PROVIDER="anthropic"` and `ANTHROPIC_API_KEY`, then restart.
 
+### Milestone 4: your own customer list, personal codes and results
+
+- **Sign-up by QR code.** **Customers → Print the QR poster** prints a sheet for the counter. Scanning it opens a public sign-up page (`/join/<your-link>`) where customers enter their email (first name optional) and tick that they agree to get offers. You can also add someone who said yes yourself.
+- **Welcome gift.** Approve the "Free cookie when you join" offer in the Approval Inbox and every new sign-up gets a personal code on screen and by email, valid for 30 days. Joining again with the same email doesn't make a second code.
+- **Send an offer to the list.** Approve an offer with a code (the drink or chips ideas, or AI ideas aimed at your list), then choose **Everyone**, **Regulars** (3+ codes used in 60 days) or **Haven't been back** (joined 30+ days ago, nothing used in 30 days) and press **Send to customers**. Each person gets their own code, which works until the offer's last day (from "Valid for 4 weeks"). Emails go out from your Gmail any day between 10 am and 7 pm, about a minute apart, up to the daily limit on the Customers page (100 by default; a personal Gmail can send about 500 a day in total). People who already got an offer are skipped, so pressing it again only reaches new sign-ups. **Stop the rest** cancels emails not yet sent.
+- **Redeem at the counter.** **Redeem a code** works on a phone: type the code (spaces, dashes and small letters are fine), see whether it's valid, used or expired and who it belongs to, then **Give the offer and mark used**. A code can only be used once, even if two people press at the same moment.
+- **Results.** Each offer shows codes given, emails sent, codes used and the use rate, in the inbox and on the Customers page.
+- **Unsubscribes** work the same as for pitches: every email has the link and one-click headers, and an unsubscribe also stops any catering emails to that address. If someone signs up again, their emails turn back on.
+
+The QR code points at `APP_URL`. On `localhost` a phone can't open it, so to try it from a phone set `APP_URL` to your computer's address on the same Wi-Fi (for example `http://192.168.1.20:3000`) or a tunnel, and restart.
+
 ### Milestone 3b: sending from Gmail, follow-ups, replies and the pipeline
 
 - **Connect Gmail** (Email sending page). The app asks Google for two permissions: send email (only emails you approved) and read email (only to spot replies to those emails). Tokens are stored encrypted with `AUTH_SECRET`.
@@ -219,10 +230,12 @@ Real store reports go in `fixtures/private/`, which git ignores. When files are 
 | `src/app/setup/` | The four setup steps and their server actions |
 | `src/app/inbox/` | Approval Inbox (Customer offers and Catering tabs) |
 | `src/app/leads/` | Leads & events page |
+| `src/lib/outreach/`, `src/lib/gmail/` | Pitch sequences, send times, replies, unsubscribes; Gmail API and the test mailbox |
+| `src/lib/customers/` | Customer list: sign-up, personal codes, audiences, sending offers, redeeming, results |
+| `src/app/customers/`, `src/app/join/`, `src/app/redeem/` | Customers page and QR poster, public sign-up page, counter redeem page |
 | `src/auth.ts` | Auth.js setup (Google, plus the dev-only demo login) |
 | `prisma/schema.prisma` | Database tables |
 
 ## Next milestones
 
-4. **Customer list:** QR email sign-up, redemption codes, email offers and results.
 5. **Mobile app.**

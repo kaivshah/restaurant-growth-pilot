@@ -12,6 +12,8 @@ export interface SlotOptions {
   /** Minutes between two emails from the same restaurant */
   spacingMin?: number;
   dailyCap?: number;
+  /** Skip Saturdays and Sundays (default true; customer offers go out any day) */
+  weekdaysOnly?: boolean;
   /** 0–1, for a little jitter so sends don't land on round minutes */
   random?: () => number;
 }
@@ -40,17 +42,17 @@ const sameDay = (a: Parts, b: Parts) => a.y === b.y && a.m === b.m && a.d === b.
 
 /**
  * The first send time at or after `after` inside the sending window, at
- * least `spacingMin` from any time already taken, on a weekday that hasn't
+ * least `spacingMin` from any time already taken, on a day (weekdays by default) that hasn't
  * reached the cap. Searches up to three weeks ahead.
  */
 export function nextSendSlot(after: Date, taken: Date[], opts: SlotOptions = {}): Date {
-  const { startHour = 9, endHour = 11, spacingMin = 4, dailyCap = 20, random = Math.random } = opts;
+  const { startHour = 9, endHour = 11, spacingMin = 4, dailyCap = 20, weekdaysOnly = true, random = Math.random } = opts;
   const spacing = spacingMin * 60_000;
   const start = pacificParts(after);
   for (let offset = 0; offset < 21; offset++) {
     const noon = fromPacific(start.y, start.m, start.d, 12);
     const day = pacificParts(new Date(noon.getTime() + offset * 86_400_000));
-    if (day.weekday === 0 || day.weekday === 6) continue;
+    if (weekdaysOnly && (day.weekday === 0 || day.weekday === 6)) continue;
     const onDay = taken.filter((t) => sameDay(pacificParts(t), day));
     if (onDay.length >= dailyCap) continue;
     const open = fromPacific(day.y, day.m, day.d, startHour);

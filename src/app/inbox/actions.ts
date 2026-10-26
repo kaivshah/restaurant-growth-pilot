@@ -1,6 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { cancelCustomerEmails, sendDueCustomerEmails, sendOfferToCustomers } from "@/lib/customers";
 import { mailFromEnv, simulateFakeReply } from "@/lib/gmail";
 import { cancelSequence, checkReplies, scheduleFollowUps, sendDueEmails, startSequence } from "@/lib/outreach";
 import { z } from "zod";
@@ -25,6 +27,7 @@ async function setStatus(formData: FormData, status: "PENDING" | "APPROVED" | "S
   if (!draft) return;
   // Once the first email has gone out, the pitch can be stopped but not un-approved.
   if (status !== "APPROVED" && draft.kind === "CATERING_PITCH" && (await db.outboundEmail.count({ where: { draftId: draft.id, status: "SENT" } }))) return;
+  if (status !== "APPROVED" && draft.kind === "CUSTOMER_OFFER" && (await db.customerEmail.count({ where: { draftId: draft.id, status: "SENT" } }))) return;
   await db.draft.update({
     where: { id: draft.id },
     data: { status, decidedAt: status === "PENDING" ? null : new Date(), skipReason: status === "SKIPPED" ? draft.skipReason : null },
@@ -39,6 +42,9 @@ async function setStatus(formData: FormData, status: "PENDING" | "APPROVED" | "S
   if (draft.kind === "CATERING_PITCH") {
     if (status === "APPROVED") await startSequence(draft.id);
     else await cancelSequence(draft.id, "Approval undone");
+  }
+  if (draft.kind === "CUSTOMER_OFFER" && status !== "APPROVED") {
+    await cancelCustomerEmails(draft.id, "Approval undone");
   }
   revalidatePath("/inbox");
   revalidatePath("/leads");
@@ -250,4 +256,36 @@ export async function sendNowForTesting(formData: FormData) {
   await sendDueEmails();
   revalidatePath("/inbox");
   revalidatePath("/pipeline");
+}
+
+// ---------- Customer offers ----------
+
+const audienceSchema = z.enum(["all", "regulars", "lapsed"]);
+
+export async function sendToCustomers(formData: FormData) {
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  const audience = audienceSchema.safeParse(formData.get("audience"));
+  if (!draft || !audience.success) return;
+  const res = await sendOfferToCustomers(draft.id, audience.data);
+  revalidatePath("/customers");
+  const note = res.ok ? `Scheduled ${res.count} ${res.count === 1 ? "email" : "emails"}.` : res.reason;
+  redirect(`/inbox?d=${draft.id}&note=${encodeURIComponent(note)}`);
+}
+
+export async function stopCustomerSends(formData: FormData) {
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  if (!draft) return;
+  await cancelCustomerEmails(draft.id);
+  revalidatePath("/inbox");
+  revalidatePath("/customers");
+}
+
+/** Development only: send scheduled customer emails now instead of waiting for the slot. */
+export async function sendCustomerEmailsNow(formData: FormData) {
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  if (!draft || mailFromEnv()?.name !== "fake") return;
+  await db.customerEmail.updateMany({ where: { draftId: draft.id, status: "SCHEDULED" }, data: { scheduledFor: new Date() } });
+  await sendDueCustomerEmails(200);
+  revalidatePath("/inbox");
+  revalidatePath("/customers");
 }

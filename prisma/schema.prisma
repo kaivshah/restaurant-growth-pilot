@@ -101,6 +101,13 @@ model Restaurant {
   events               Event[]
   /// Most emails sent per day from the connected Gmail (warm-up for a new sender)
   sendDailyCap         Int             @default(20)
+  /// Most offer emails to customers per day (separate from catering pitches)
+  customerDailyCap     Int             @default(100)
+  /// The public sign-up link: /join/<joinSlug>
+  joinSlug             String?         @unique
+  customers            Customer[]
+  offerCodes           OfferCode[]
+  customerEmails       CustomerEmail[]
   gmail                GmailAccount?
   emails               OutboundEmail[]
   suppressions         Suppression[]
@@ -214,6 +221,11 @@ model Draft {
   repliedAt      DateTime?
   /// The owner has dealt with the reply (moved it on in the pipeline)
   replyHandled   Boolean         @default(false)
+  /// Customer offers: who it was sent to ("all" | "regulars" | "lapsed") and when
+  sentAudience   String?
+  sentAt         DateTime?
+  codes          OfferCode[]
+  customerEmails CustomerEmail[]
   emails         OutboundEmail[]
   skipReason     String?
   decidedAt      DateTime?
@@ -565,4 +577,75 @@ model Suppression {
   createdAt    DateTime   @default(now())
 
   @@unique([restaurantId, email])
+}
+
+// ---------- Customer list (milestone 4) ----------
+
+enum CustomerStatus {
+  ACTIVE
+  UNSUBSCRIBED
+}
+
+/// Someone who joined the restaurant's email list (QR sign-up at the counter, or added by the owner with consent).
+model Customer {
+  id           String          @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  email        String
+  firstName    String?
+  /// "qr" | "owner"
+  source       String
+  status       CustomerStatus  @default(ACTIVE)
+  /// When they agreed to get offers by email (required to email them)
+  consentAt    DateTime
+  codes        OfferCode[]
+  emails       CustomerEmail[]
+  createdAt    DateTime        @default(now())
+
+  @@unique([restaurantId, email])
+  @@index([restaurantId, status])
+}
+
+/// One customer's personal code for one offer, redeemed at the counter.
+model OfferCode {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  draftId      String
+  draft        Draft      @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  customerId   String
+  customer     Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// e.g. "K7QM-4TZ9": no 0/O or 1/I, easy to read out at the counter
+  code         String     @unique
+  validFrom    DateTime
+  validUntil   DateTime
+  redeemedAt   DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@unique([draftId, customerId])
+  @@index([restaurantId, redeemedAt])
+}
+
+/// An offer email to one customer, sent from the restaurant's Gmail.
+model CustomerEmail {
+  id             String      @id @default(cuid())
+  restaurantId   String
+  restaurant     Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  draftId        String
+  draft          Draft       @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  toEmail        String
+  subject        String
+  body           String
+  status         EmailStatus @default(SCHEDULED)
+  scheduledFor   DateTime
+  sentAt         DateTime?
+  gmailMessageId String?
+  attempts       Int         @default(0)
+  error          String?
+  createdAt      DateTime    @default(now())
+
+  @@unique([draftId, customerId])
+  @@index([status, scheduledFor])
 }

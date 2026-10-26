@@ -44,6 +44,9 @@ export async function suppress(restaurantId: string, email: string, reason: stri
   const address = email.toLowerCase();
   await db.suppression.upsert({ where: { restaurantId_email: { restaurantId, email: address } }, create: { restaurantId, email: address, reason }, update: {} });
   await db.outboundEmail.updateMany({ where: { restaurantId, toEmail: address, status: "SCHEDULED" }, data: { status: "CANCELLED", error: `Stopped: ${reason}` } });
+  // The same address may be on the customer list: no more offers either.
+  await db.customerEmail.updateMany({ where: { restaurantId, toEmail: address, status: "SCHEDULED" }, data: { status: "CANCELLED", error: `Stopped: ${reason}` } });
+  await db.customer.updateMany({ where: { restaurantId, email: address }, data: { status: "UNSUBSCRIBED" } });
   if (reason === "unsubscribed" || reason === "replied-stop" || reason === "bounced") {
     const stage: PipelineStage = reason === "bounced" ? "BOUNCED" : "UNSUBSCRIBED";
     const drafts = await db.draft.findMany({ where: { restaurantId, contact: { email: address }, stage: { notIn: ["WON", "LOST"] } }, select: { id: true } });
@@ -335,12 +338,14 @@ export async function checkReplies(now = new Date(), everyMs = Number(process.en
 
 let running = false;
 
-/** One pass of the outreach work: send what's due, then look for replies. */
+/** One pass of the outreach work: send what's due (pitches and customer offers), then look for replies. */
 export async function runOutreach() {
   if (running) return;
   running = true;
   try {
     await sendDueEmails();
+    const { sendDueCustomerEmails } = await import("@/lib/customers");
+    await sendDueCustomerEmails();
     await checkReplies();
   } catch (err) {
     console.error("[mail] outreach error:", err instanceof Error ? err.message : err);

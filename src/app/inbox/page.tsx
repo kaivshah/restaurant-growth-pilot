@@ -9,6 +9,7 @@ import { approveDraft, refreshIdeas, setSkipReason, skipDraft, undoDraft } from 
 import { AiStatus } from "./ai-status";
 import { AutoRefresh } from "./auto-refresh";
 import { CateringTab } from "./catering";
+import { CustomerSend } from "./customer-send";
 import { RepliesTab } from "./replies";
 import { CopyEditor } from "./copy-editor";
 import { HourlyChart } from "./hourly-chart";
@@ -29,10 +30,10 @@ function greeting(now = new Date()) {
   return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
 }
 
-export default async function InboxPage({ searchParams }: { searchParams: Promise<{ tab?: string; d?: string }> }) {
+export default async function InboxPage({ searchParams }: { searchParams: Promise<{ tab?: string; d?: string; note?: string }> }) {
   const restaurant = await requireRestaurant();
   if (!restaurant.setupCompletedAt) redirect("/setup/reports");
-  const { tab = "offers", d } = await searchParams;
+  const { tab = "offers", d, note } = await searchParams;
 
   // Pick up any work left from a restart.
   await requeueStaleJobs();
@@ -304,17 +305,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                       </form>
                     </div>
                   )}
-                  {selected.status === "APPROVED" && (
-                    <div role="status" className="flex flex-wrap items-center gap-3 border-t border-sand bg-primary-soft px-6 py-5 text-primary-ink sm:px-7">
-                      <strong className="flex-[1_1_300px]">Approved. Sending to your customer list arrives with email sign-ups in a later update.</strong>
-                      <form action={undoDraft}>
-                        <input type="hidden" name="id" value={selected.id} />
-                        <button type="submit" className="min-h-11 rounded-field border-2 border-primary px-4 font-bold">
-                          Undo
-                        </button>
-                      </form>
-                    </div>
-                  )}
+                  {selected.status === "APPROVED" && <CustomerSend draft={selected} note={note} />}
                   {selected.status === "SKIPPED" && (
                     <div role="status" className="flex flex-col gap-3 border-t border-sand bg-danger-soft px-6 py-5 text-[#5e2121] sm:px-7">
                       <div className="flex flex-wrap items-center gap-3">
