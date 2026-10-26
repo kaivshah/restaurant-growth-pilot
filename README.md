@@ -26,6 +26,24 @@ Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 
 **Switching to Claude:** set `LLM_PROVIDER="anthropic"`, `ANALYST_PROVIDER="anthropic"` and `ANTHROPIC_API_KEY`, then restart.
 
+### Milestone 3b: sending from Gmail, follow-ups, replies and the pipeline
+
+- **Connect Gmail** (Email sending page). The app asks Google for two permissions: send email (only emails you approved) and read email (only to spot replies to those emails). Tokens are stored encrypted with `AUTH_SECRET`.
+- **Approve a pitch → its sequence starts.** The first email goes out in the next send slot (weekdays 9–11 am San Diego time, a few minutes apart, at most 20 a day by default). Follow-ups go out on day 4 and day 10 in the same thread, unless the business replies. The AI writes both follow-ups in the background when you approve (one request covers up to 8 pitches); edit or remove them on the pitch any time before they send. **Stop sending** cancels what's left; **Undo approval** works until the first email is sent.
+- **Replies** are checked every 10 minutes (`REPLY_CHECK_MINUTES`). A reply stops the follow-ups and appears under **Replies waiting** with a link to answer in Gmail. "Please remove me" replies and bounces add the address to the do-not-contact list.
+- **Every email** has your outlet's address, the franchise line, an unsubscribe link (`/u/…`) and one-click unsubscribe headers (Gmail requires these from bulk senders). Unsubscribes are permanent; you can also add addresses yourself.
+- **Pipeline** shows each deal: Scheduled → Contacted → Replied → Quote sent → Won / Lost.
+
+**Setting up Gmail (one time):**
+
+1. In Google Cloud Console → APIs & Services → Library, enable the **Gmail API** in the project that has your OAuth client.
+2. OAuth consent screen: add the scopes `gmail.send` and `gmail.readonly`, and add yourself (the owner's Gmail) under **Test users**.
+3. Credentials → your OAuth client → add the redirect URI `http://localhost:3000/api/gmail/callback` (and your production URL's later).
+4. In `.env`: `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, and `APP_URL="http://localhost:3000"`.
+5. Run `npm run worker` next to `npm run dev`: the worker sends at the scheduled times and checks replies.
+
+To try it without Google, set `GMAIL_PROVIDER="fake"`: "Connect Gmail" connects a test mailbox, and each pitch gets **Send the first email now** and **Pretend they replied** buttons.
+
 ### Milestone 3a: catering leads, events and pitches on request (sending comes in 3b)
 
 **Scan my area** (also run when setup is finished) collects; it writes nothing and uses no AI tokens except one web search:
@@ -206,5 +224,5 @@ Real store reports go in `fixtures/private/`, which git ignores. When files are 
 
 ## Next milestones
 
-3b. **Catering sending:** Gmail sending with a daily cap, follow-ups on day 4 and 10, unsubscribe and suppression list, reply tracking and a pipeline board.
 4. **Customer list:** QR email sign-up, redemption codes, email offers and results.
+5. **Mobile app.**

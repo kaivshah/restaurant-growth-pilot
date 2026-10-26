@@ -9,6 +9,7 @@ import { approveDraft, refreshIdeas, setSkipReason, skipDraft, undoDraft } from 
 import { AiStatus } from "./ai-status";
 import { AutoRefresh } from "./auto-refresh";
 import { CateringTab } from "./catering";
+import { RepliesTab } from "./replies";
 import { CopyEditor } from "./copy-editor";
 import { HourlyChart } from "./hourly-chart";
 import { SourcePill, Tick, fmtValue } from "./parts";
@@ -37,7 +38,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   await requeueStaleJobs();
   after(() => kickJobs());
 
-  const [drafts, job, leadsJob, lastScan, pendingPitches, lastRun] = await Promise.all([
+  const [drafts, job, leadsJob, lastScan, pendingPitches, lastRun, newReplies] = await Promise.all([
     db.draft.findMany({
       where: { restaurantId: restaurant.id, kind: "CUSTOMER_OFFER" },
       orderBy: [{ createdAt: "asc" }],
@@ -47,10 +48,11 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     db.leadScan.findFirst({ where: { restaurantId: restaurant.id, status: "DONE" }, orderBy: { createdAt: "desc" } }),
     db.draft.count({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: "PENDING" } }),
     db.analysisRun.findFirst({ where: { restaurantId: restaurant.id, purpose: "offers", status: { not: "RUNNING" } }, orderBy: { createdAt: "desc" } }),
+    db.draft.count({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", stage: "REPLIED", replyHandled: false } }),
   ]);
   const findings = (lastRun?.status === "DONE" ? (lastRun.findings as unknown as Finding[]) : null) ?? [];
   const pendingOffers = drafts.filter((x) => x.status === "PENDING").length;
-  const pending = pendingOffers + pendingPitches;
+  const pending = pendingOffers + pendingPitches + newReplies;
   const working = jobState(job) === "working";
   const scanning = jobState(leadsJob) === "working";
   const selected = drafts.find((x) => x.id === d) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
@@ -58,7 +60,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   const cards = [
     { href: "/inbox?tab=catering", tab: "catering", n: pendingPitches, title: "Catering pitches", sub: `Offices, schools and events within ${restaurant.radiusMiles} mi` },
     { href: "/inbox?tab=offers", tab: "offers", n: pendingOffers, title: "Customer offers", sub: "Ideas from your weekly reports" },
-    { href: null, tab: "replies", n: 0, title: "Replies waiting", sub: "We'll flag interested replies here" },
+    { href: "/inbox?tab=replies", tab: "replies", n: newReplies, title: "Replies waiting", sub: "Businesses that answered your pitches" },
   ];
 
   return (
@@ -77,7 +79,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
             Nothing is sent until you approve it.
           </p>
         </div>
-        {tab !== "catering" && (
+        {tab === "offers" && (
           <form action={refreshIdeas}>
             <button type="submit" disabled={working} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60">
               {working ? "Preparing ideas…" : "Refresh ideas"}
@@ -109,7 +111,9 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         })}
       </div>
 
-      {tab === "catering" ? (
+      {tab === "replies" ? (
+        <RepliesTab restaurantId={restaurant.id} />
+      ) : tab === "catering" ? (
         <CateringTab restaurantId={restaurant.id} radiusMiles={restaurant.radiusMiles} selectedId={d} job={leadsJob} scan={lastScan} />
       ) : (
         <>

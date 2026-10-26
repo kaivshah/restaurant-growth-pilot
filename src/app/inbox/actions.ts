@@ -1,13 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { mailFromEnv, simulateFakeReply } from "@/lib/gmail";
+import { cancelSequence, checkReplies, scheduleFollowUps, sendDueEmails, startSequence } from "@/lib/outreach";
 import { z } from "zod";
 import { after } from "next/server";
 import { db } from "@/lib/db";
 import { REWRITE_LIMIT, enqueueDraftJob, logCall, kickJobs } from "@/lib/drafts";
 import { missingAiReason, providerFromEnv, rewriteOfferCopy } from "@/lib/llm";
 import { LIMITS, bodyLimit } from "@/lib/llm/validate";
-import { pitchPacket } from "@/lib/leads";
+import { packetForDraft } from "@/lib/leads";
 import { LEAD_SKIP_REASONS } from "@/lib/leads/score";
 import { isBrandSafe } from "@/lib/offers";
 import { requireRestaurant } from "@/lib/restaurant";
@@ -21,6 +23,8 @@ async function ownDraft(id: string) {
 async function setStatus(formData: FormData, status: "PENDING" | "APPROVED" | "SKIPPED") {
   const { draft } = await ownDraft(String(formData.get("id") ?? ""));
   if (!draft) return;
+  // Once the first email has gone out, the pitch can be stopped but not un-approved.
+  if (status !== "APPROVED" && draft.kind === "CATERING_PITCH" && (await db.outboundEmail.count({ where: { draftId: draft.id, status: "SENT" } }))) return;
   await db.draft.update({
     where: { id: draft.id },
     data: { status, decidedAt: status === "PENDING" ? null : new Date(), skipReason: status === "SKIPPED" ? draft.skipReason : null },
@@ -32,8 +36,13 @@ async function setStatus(formData: FormData, status: "PENDING" | "APPROVED" | "S
       data: status === "APPROVED" ? { status: "APPROVED" } : status === "PENDING" ? { status: "DRAFTED", excludeReason: null } : {},
     });
   }
+  if (draft.kind === "CATERING_PITCH") {
+    if (status === "APPROVED") await startSequence(draft.id);
+    else await cancelSequence(draft.id, "Approval undone");
+  }
   revalidatePath("/inbox");
   revalidatePath("/leads");
+  revalidatePath("/pipeline");
 }
 
 export async function approveDraft(formData: FormData) {
@@ -91,6 +100,9 @@ export async function setPitchContact(_prev: ContactState, formData: FormData): 
     where: { id: draft.id },
     data: { contactId: contact.id, audience: [contact.name ?? contact.email, contact.role].filter(Boolean).join(", ") },
   });
+  // Emails not sent yet go to the new address; an approved pitch waiting for a contact starts now.
+  await db.outboundEmail.updateMany({ where: { draftId: draft.id, status: "SCHEDULED" }, data: { toEmail: contact.email.toLowerCase() } });
+  if (draft.status === "APPROVED") await startSequence(draft.id);
   revalidatePath("/inbox");
   revalidatePath("/leads");
   return { ok: "Contact saved. Check the greeting in the email still fits." };
@@ -126,7 +138,7 @@ export async function rewriteDraft(_prev: CopyState, formData: FormData): Promis
   }
 
   // Rewrite within the facts the draft was written from, so it can't add new claims.
-  const packet = draft.kind === "CATERING_PITCH" ? await storedPitchPacket(restaurant, draft) : {
+  const packet = draft.kind === "CATERING_PITCH" ? await packetForDraft(restaurant, draft) : {
     restaurant: { name: restaurant.name, brand: restaurant.brand, kind: restaurant.kind },
     offer: { key: draft.offerKey, title: draft.title, schedule: draft.schedule, audience: draft.audience, copyLabel: draft.copyLabel },
     facts: draft.facts.length ? draft.facts : [draft.title, draft.schedule],
@@ -148,17 +160,6 @@ export async function rewriteDraft(_prev: CopyState, formData: FormData): Promis
   return { ok: "Rewritten. Review it, then save or approve.", ...result.copy, rewritesLeft: REWRITE_LIMIT - updated.rewriteCount };
 }
 
-async function storedPitchPacket(restaurant: Awaited<ReturnType<typeof requireRestaurant>>, draft: { leadId: string | null; contactId: string | null; eventId: string | null; evidence: unknown }) {
-  if (!draft.leadId) return null;
-  const [lead, contact, event] = await Promise.all([
-    db.lead.findUnique({ where: { id: draft.leadId } }),
-    draft.contactId ? db.contact.findUnique({ where: { id: draft.contactId } }) : null,
-    draft.eventId ? db.event.findUnique({ where: { id: draft.eventId } }) : null,
-  ]);
-  const ev = draft.evidence as { offer?: "free_cookie_platter" | "free_drinks_tray" | "free_delivery"; occasion?: string } | null;
-  if (!lead || !ev?.offer || !ev.occasion) return null;
-  return pitchPacket(restaurant, lead, contact, event, { offer: ev.offer, occasion: ev.occasion });
-}
 
 /** "Scan my area": search again now, even if the last scan is recent. */
 export async function scanMyArea() {
@@ -174,4 +175,79 @@ export async function refreshIdeas() {
   await enqueueDraftJob(restaurant.id);
   after(() => kickJobs());
   revalidatePath("/inbox");
+}
+
+// ---------- Sending, follow-ups and the pipeline (milestone 3b) ----------
+
+/** Stop a pitch's remaining emails (the ones already sent stay sent). */
+export async function stopSequence(formData: FormData) {
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  if (!draft) return;
+  await cancelSequence(draft.id);
+  revalidatePath("/inbox");
+  revalidatePath("/pipeline");
+}
+
+/** Retry starting a sequence, e.g. after adding a contact or connecting Gmail. */
+export async function startSending(formData: FormData) {
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  if (!draft) return;
+  await startSequence(draft.id);
+  revalidatePath("/inbox");
+}
+
+export type FollowUpState = { ok?: string; error?: string } | undefined;
+
+/** The owner edits the follow-ups before they go out. */
+export async function saveFollowUps(_prev: FollowUpState, formData: FormData): Promise<FollowUpState> {
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  if (!draft) return { error: "This pitch no longer exists." };
+  const bodies = [String(formData.get("followup1") ?? "").trim(), String(formData.get("followup2") ?? "").trim()];
+  if (bodies.some((b) => b.length > 1200)) return { error: "Keep each follow-up under 1,200 characters." };
+  await db.draft.update({ where: { id: draft.id }, data: { followUps: bodies.map((body, i) => ({ day: [4, 10][i], body })).filter((f) => f.body) } });
+  await scheduleFollowUps(draft.id);
+  // An emptied follow-up doesn't go out.
+  const steps = (["FOLLOWUP_1", "FOLLOWUP_2"] as const).filter((_, i) => !bodies[i]);
+  if (steps.length) await db.outboundEmail.updateMany({ where: { draftId: draft.id, step: { in: [...steps] }, status: "SCHEDULED" }, data: { status: "CANCELLED", error: "Removed by you" } });
+  revalidatePath("/inbox");
+  return { ok: "Follow-ups saved." };
+}
+
+const STAGES = ["CONTACTED", "REPLIED", "QUOTE", "WON", "LOST"] as const;
+
+/** Move a deal along the pipeline (or mark that the owner dealt with a reply). */
+export async function setStage(formData: FormData) {
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  const stage = String(formData.get("stage") ?? "") as (typeof STAGES)[number];
+  if (!draft || !STAGES.includes(stage)) return;
+  await db.draft.update({ where: { id: draft.id }, data: { stage, stageUpdatedAt: new Date(), replyHandled: stage !== "REPLIED" ? true : draft.replyHandled } });
+  // Talking to them now: no more automatic follow-ups.
+  if (stage !== "CONTACTED") await db.outboundEmail.updateMany({ where: { draftId: draft.id, status: "SCHEDULED" }, data: { status: "CANCELLED", error: `Moved to ${stage.toLowerCase()}` } });
+  revalidatePath("/inbox");
+  revalidatePath("/pipeline");
+}
+
+/** Development only (GMAIL_PROVIDER=fake): pretend the business answered. */
+export async function simulateReply(formData: FormData) {
+  if (mailFromEnv()?.name !== "fake") return;
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  if (!draft) return;
+  const first = await db.outboundEmail.findFirst({ where: { draftId: draft.id, step: "FIRST", status: "SENT" } });
+  if (!first?.gmailThreadId) return;
+  const text = String(formData.get("text") ?? "") || "Thanks for reaching out! We have a team lunch for 25 people on the 14th. Could you send a menu and a quote?";
+  await simulateFakeReply(first.gmailThreadId, first.toEmail, text);
+  await checkReplies(new Date(), 0);
+  revalidatePath("/inbox");
+  revalidatePath("/pipeline");
+}
+
+/** Development only: send due emails now instead of waiting for the slot. */
+export async function sendNowForTesting(formData: FormData) {
+  if (mailFromEnv()?.name !== "fake") return;
+  const { draft } = await ownDraft(String(formData.get("id") ?? ""));
+  if (!draft) return;
+  await db.outboundEmail.updateMany({ where: { draftId: draft.id, step: "FIRST", status: "SCHEDULED" }, data: { scheduledFor: new Date() } });
+  await sendDueEmails();
+  revalidatePath("/inbox");
+  revalidatePath("/pipeline");
 }

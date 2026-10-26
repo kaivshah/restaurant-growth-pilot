@@ -403,7 +403,7 @@ export async function savePitch(restaurant: Restaurant, plan: PitchPlan, copy: {
       why: p.why,
       audience: contactLabel(contact),
       cost: `${OFFER_TEXT[p.offer][0].toUpperCase()}${OFFER_TEXT[p.offer].slice(1)} on a first order of ${restaurant.minCateringOrder}+ people`,
-      measure: "Replies and first orders, once sending is turned on",
+      measure: "Replies and first orders",
       checks,
       evidence: json({
         kind: "pitch",
@@ -673,4 +673,17 @@ async function leadForEvent(restaurant: Restaurant, event: EventRow): Promise<Le
   });
   await db.event.update({ where: { id: event.id }, data: { venueLeadId: lead.id } });
   return lead;
+}
+
+/** The facts a saved pitch was written from, rebuilt for rewrites and follow-ups. */
+export async function packetForDraft(restaurant: Restaurant, draft: { leadId: string | null; contactId: string | null; eventId: string | null; evidence: unknown }): Promise<FactsPacket | null> {
+  if (!draft.leadId) return null;
+  const [lead, contact, event] = await Promise.all([
+    db.lead.findUnique({ where: { id: draft.leadId } }),
+    draft.contactId ? db.contact.findUnique({ where: { id: draft.contactId } }) : null,
+    draft.eventId ? db.event.findUnique({ where: { id: draft.eventId } }) : null,
+  ]);
+  const ev = draft.evidence as { offer?: Pitch["offer"]; occasion?: string } | null;
+  if (!lead || !ev?.offer || !ev.occasion) return null;
+  return pitchPacket(restaurant, lead, contact, event, { offer: ev.offer, occasion: ev.occasion });
 }

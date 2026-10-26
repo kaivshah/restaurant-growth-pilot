@@ -5,8 +5,10 @@ import { Logo } from "@/components/ui";
 const NAV = [
   { href: "/inbox", label: "Approval Inbox", key: "inbox" },
   { href: "/leads", label: "Leads & events", key: "leads" },
+  { href: "/pipeline", label: "Pipeline", key: "pipeline" },
   { href: "/setup/reports", label: "Reports", key: "reports" },
   { href: "/setup/rules", label: "Settings", key: "settings" },
+  { href: "/settings/email", label: "Email sending", key: "email" },
 ];
 
 export function AppShell({

@@ -83,3 +83,16 @@ export function batchPitchRequest(packets: { id: string; packet: FactsPacket }[]
     ...packets.map(({ id, packet }) => `\n### ${id}\n${pitchFacts(packet)}`),
   ].join("\n");
 }
+
+/** Follow-ups for approved pitches, several per request: the facts and the first email of each. */
+export function followUpRequest(items: { id: string; packet: FactsPacket; first: { subject: string; body: string } }[]): string {
+  const name = items[0].packet.restaurant.name;
+  return [
+    `Write two short follow-up emails for each catering pitch below, from ${name}. They are sent in the same email thread only if there's no reply:`,
+    "- followup1, after 4 days: a friendly nudge in two or three sentences that adds one helpful detail from the facts (no new facts).",
+    "- followup2, after 10 days: a last, polite check-in in one or two sentences that says you won't email again unless they'd like to hear back.",
+    `Use only the facts given. No new offers, prices, menu items or claims. Don't repeat the whole pitch. Plain text: a greeting, the message, and "The team at ${name}".`,
+    'Return {"items": [{"id", "followup1", "followup2"}]} with the same ids.',
+    ...items.map(({ id, packet, first }) => `\n### ${id}\n${pitchFacts(packet)}\nFirst email subject: ${first.subject}\nFirst email:\n${first.body}`),
+  ].join("\n");
+}

@@ -46,6 +46,20 @@ export interface CopyProvider {
   rewrite?(packet: FactsPacket, current: OfferCopy, instruction: string, signal: AbortSignal): Promise<WriteResult>;
   /** Several pitches from one restaurant in a single request (shared rules sent once) */
   writeMany?(items: { id: string; packet: FactsPacket }[], signal: AbortSignal): Promise<BatchResult>;
+  /** The two follow-ups for several approved pitches in a single request */
+  writeFollowUps?(items: FollowUpItem[], signal: AbortSignal): Promise<FollowUpResult>;
+}
+
+export interface FollowUpItem {
+  id: string;
+  packet: FactsPacket;
+  first: { subject: string; body: string };
+}
+
+export interface FollowUpResult {
+  items: { id: string; followup1: string; followup2: string }[];
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export interface BatchResult {

@@ -43,8 +43,13 @@ The cache (`src/lib/cache`) has two tiers: an in-process LRU (500 entries) for r
 - **Stable prefixes for provider caching.** Instructions come first and per-item facts last, so Gemini's automatic context caching can apply on longer prompts. The Claude analyst sets top-level `cache_control`, so each turn of its tool loop reads the earlier conversation from cache (about a tenth of the input price).
 - **No AI until asked.** The area scan uses no AI except one web search; pitches are written only on request.
 
+## Sending email
+
+Approved pitches become `OutboundEmail` rows (first email + two follow-ups) with a send time from `nextSendSlot` (weekday mornings Pacific, spaced, daily cap). Every worker pass runs `runOutreach`: it claims due emails with `FOR UPDATE SKIP LOCKED`, re-checks the do-not-contact list and the deal's stage, sends through the Gmail API (follow-ups thread with `In-Reply-To`), and every 10 minutes reads the threads it started to record replies and bounces. Gmail tokens are encrypted (AES-256-GCM, key from `AUTH_SECRET`); unsubscribe links are HMAC-signed.
+
 ## Rate limits
 
+- Every Gemini request is counted per Pacific day (`ApiUsage`). The daily limit is read from Google's `QuotaFailure` reply (or set with `GEMINI_RPD`); once it's used up nothing more is sent until midnight Pacific and waiting jobs resume then, instead of retries burning failed requests.
 - Gemini requests are spaced by `GEMINI_RPM` (default 10 for the free tier). The schedule is one `RateSlot` row in Postgres updated atomically, so all web servers and workers share one limit. After a 429, nobody sends until Google's delay has passed (capped at a minute; longer waits make the job retry later).
 - Copy calls run at most 2 at a time per process; batches keep the count of requests low.
 

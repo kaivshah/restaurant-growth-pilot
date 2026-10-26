@@ -70,23 +70,23 @@ enum PromoApproval {
 }
 
 model Restaurant {
-  id                   String         @id @default(cuid())
+  id                   String          @id @default(cuid())
   ownerId              String
-  owner                User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner                User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   name                 String
-  kind                 RestaurantKind @default(FRANCHISE)
+  kind                 RestaurantKind  @default(FRANCHISE)
   brand                String?
-  radiusMiles          Int            @default(3)
-  minCateringOrder     Int            @default(10)
+  radiusMiles          Int             @default(3)
+  minCateringOrder     Int             @default(10)
   openingHours         String?
   // Brand rules (setup step 4)
-  promoApproval        PromoApproval  @default(UNSURE)
-  maxDiscountPct       Int            @default(15)
-  allowFreeExtra       Boolean        @default(true)
-  allowFreeDelivery    Boolean        @default(true)
-  allowPercentOff      Boolean        @default(true)
-  allowBogo            Boolean        @default(false)
-  useBrandCateringMenu Boolean        @default(true)
+  promoApproval        PromoApproval   @default(UNSURE)
+  maxDiscountPct       Int             @default(15)
+  allowFreeExtra       Boolean         @default(true)
+  allowFreeDelivery    Boolean         @default(true)
+  allowPercentOff      Boolean         @default(true)
+  allowBogo            Boolean         @default(false)
+  useBrandCateringMenu Boolean         @default(true)
   setupCompletedAt     DateTime?
   outlets              Outlet[]
   reports              ReportUpload[]
@@ -94,11 +94,16 @@ model Restaurant {
   draftJobs            DraftJob[]
   analysisRuns         AnalysisRun[]
   llmCalls             LlmCall[]
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
   leads                Lead[]
   leadScans            LeadScan[]
   events               Event[]
+  /// Most emails sent per day from the connected Gmail (warm-up for a new sender)
+  sendDailyCap         Int             @default(20)
+  gmail                GmailAccount?
+  emails               OutboundEmail[]
+  suppressions         Suppression[]
 
   @@index([ownerId])
 }
@@ -159,50 +164,61 @@ enum DraftStatus {
 /// One suggestion in the Approval Inbox. Numbers come from the owner's
 /// confirmed reports; only headline and body are written by the LLM.
 model Draft {
-  id            String       @id @default(cuid())
-  leadId        String?
-  lead          Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  contactId     String?
-  contact       Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  eventId       String?
-  event         Event?       @relation(fields: [eventId], references: [id], onDelete: SetNull)
-  restaurantId  String
-  restaurant    Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  kind          DraftKind    @default(CUSTOMER_OFFER)
+  id             String          @id @default(cuid())
+  leadId         String?
+  lead           Lead?           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  contactId      String?
+  contact        Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  eventId        String?
+  event          Event?          @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  restaurantId   String
+  restaurant     Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  kind           DraftKind       @default(CUSTOMER_OFFER)
   /// Which idea produced it: a rule ("welcome", "afternoon-drink"…) or an AI idea ("ai-…")
-  offerKey      String
-  source        DraftSource  @default(RULES)
+  offerKey       String
+  source         DraftSource     @default(RULES)
   /// The AI analyst's confidence: "low" | "medium" | "high"; null for rule ideas
-  confidence    String?
-  analysisRunId String?
-  analysisRun   AnalysisRun? @relation(fields: [analysisRunId], references: [id], onDelete: SetNull)
-  category      String
-  title         String
-  schedule      String
-  why           String
-  audience      String
-  cost          String
-  measure       String
+  confidence     String?
+  analysisRunId  String?
+  analysisRun    AnalysisRun?    @relation(fields: [analysisRunId], references: [id], onDelete: SetNull)
+  category       String
+  title          String
+  schedule       String
+  why            String
+  audience       String
+  cost           String
+  measure        String
   /// Rule checks shown as ticks, e.g. ["Free extra, no price cut"]
-  checks        String[]
+  checks         String[]
   /// Supporting data for the detail panel (e.g. hourly sales bars)
-  evidence      Json?
-  copyLabel     String
+  evidence       Json?
+  copyLabel      String
   /// Facts the copywriter may use, so rewrites stay within them
-  facts         String[]
-  needsCode     Boolean      @default(false)
-  headline      String
-  body          String
+  facts          String[]
+  needsCode      Boolean         @default(false)
+  headline       String
+  body           String
   /// Who wrote headline/body: "template", "ollama:<model>", "anthropic:<model>"
-  writtenBy     String
+  writtenBy      String
   /// Hash of the facts sent to the writer; the same facts are never drafted twice
-  factsHash     String
-  rewriteCount  Int          @default(0)
-  status        DraftStatus  @default(PENDING)
-  skipReason    String?
-  decidedAt     DateTime?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  factsHash      String
+  rewriteCount   Int             @default(0)
+  status         DraftStatus     @default(PENDING)
+  /// Catering pitches: where the deal stands after approval
+  stage          PipelineStage   @default(NONE)
+  stageUpdatedAt DateTime?
+  /// The two follow-ups sent if there's no reply: [{"day":4,"body":"…"},{"day":10,"body":"…"}]
+  followUps      Json?
+  /// First lines of the business's reply, and when it came
+  replySnippet   String?
+  repliedAt      DateTime?
+  /// The owner has dealt with the reply (moved it on in the pipeline)
+  replyHandled   Boolean         @default(false)
+  emails         OutboundEmail[]
+  skipReason     String?
+  decidedAt      DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@unique([restaurantId, factsHash])
   @@index([restaurantId, status])
@@ -213,6 +229,7 @@ enum JobKind {
   LEADS // scan the area for businesses and events (no AI, no pitches)
   SUGGEST // AI marks the most promising leads and events
   PITCH // write pitches the owner asked for (one or many at once)
+  FOLLOWUPS // write the day-4 and day-10 follow-ups for approved pitches
 }
 
 enum JobStatus {
@@ -464,4 +481,88 @@ model ApiUsage {
   /// No requests before this time (the daily quota is used up)
   exhaustedUntil DateTime?
   updatedAt      DateTime  @updatedAt
+}
+
+// ---------- Sending (milestone 3b) ----------
+
+enum PipelineStage {
+  NONE // not approved yet, or nothing to send
+  SCHEDULED // approved; the first email is waiting for its send slot
+  CONTACTED // the first email went out
+  REPLIED
+  QUOTE // the owner sent a quote
+  WON
+  LOST
+  UNSUBSCRIBED
+  BOUNCED
+}
+
+/// The owner's Gmail, connected for sending and reading replies. Tokens are encrypted.
+model GmailAccount {
+  id                   String     @id @default(cuid())
+  restaurantId         String     @unique
+  restaurant           Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  email                String
+  refreshToken         String
+  accessToken          String?
+  accessTokenExpiresAt DateTime?
+  scopes               String
+  /// Last problem talking to Gmail (e.g. access revoked); sending pauses until reconnected
+  error                String?
+  lastReplyCheckAt     DateTime?
+  connectedAt          DateTime   @default(now())
+}
+
+enum EmailStep {
+  FIRST
+  FOLLOWUP_1
+  FOLLOWUP_2
+}
+
+enum EmailStatus {
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+/// One email of a pitch's sequence: the first email and up to two follow-ups in the same thread.
+model OutboundEmail {
+  id             String      @id @default(cuid())
+  restaurantId   String
+  restaurant     Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  draftId        String
+  draft          Draft       @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  step           EmailStep
+  toEmail        String
+  subject        String
+  body           String
+  status         EmailStatus @default(SCHEDULED)
+  scheduledFor   DateTime
+  sentAt         DateTime?
+  gmailMessageId String?
+  gmailThreadId  String?
+  /// The Message-ID header, so follow-ups thread under the first email
+  rfcMessageId   String?
+  attempts       Int         @default(0)
+  error          String?
+  createdAt      DateTime    @default(now())
+
+  @@unique([draftId, step])
+  @@index([status, scheduledFor])
+  @@index([restaurantId, sentAt])
+}
+
+/// Addresses that must never be emailed again by this restaurant: unsubscribed, bounced or removed by the owner.
+model Suppression {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  email        String
+  /// "unsubscribed" | "bounced" | "owner" | "replied-stop"
+  reason       String
+  createdAt    DateTime   @default(now())
+
+  @@unique([restaurantId, email])
 }

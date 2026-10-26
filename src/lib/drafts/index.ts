@@ -267,7 +267,8 @@ export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFF
  * and leads pages show it) and printed in the server terminal.
  */
 export async function progress(restaurantId: string, kind: JobKind, text: string) {
-  console.log(`[${kind === "LEADS" ? "scan" : kind === "SUGGEST" ? "suggest" : kind === "PITCH" ? "pitch" : "offers"}] ${text}`);
+  const label = { LEADS: "scan", SUGGEST: "suggest", PITCH: "pitch", FOLLOWUPS: "follow-ups", OFFERS: "offers" }[kind];
+  console.log(`[${label}] ${text}`);
   await db.draftJob.updateMany({ where: { restaurantId, kind, status: "RUNNING" }, data: { message: text } });
 }
 
@@ -280,7 +281,9 @@ const draining = new Set<JobKind>();
  * claimed atomically so two servers can't run the same one.
  */
 export async function processDraftJobs(maxJobs = 20) {
-  await Promise.all((["OFFERS", "LEADS", "SUGGEST", "PITCH"] as const).map((kind) => drain(kind, maxJobs)));
+  await Promise.all((["OFFERS", "LEADS", "SUGGEST", "PITCH", "FOLLOWUPS"] as const).map((kind) => drain(kind, maxJobs)));
+  // Sending and reply checks ride along with every pass.
+  await (await import("@/lib/outreach")).runOutreach();
 }
 
 /**
@@ -331,6 +334,16 @@ export async function enqueuePitches(restaurantId: string, targets: PitchTarget[
   return db.draftJob.create({ data: { restaurantId, kind: "PITCH", payload: targets } });
 }
 
+/** Queue follow-up writing for approved pitches; joins a waiting batch like pitches do. */
+export async function enqueueFollowUps(restaurantId: string, draftIds: string[]) {
+  const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind: "FOLLOWUPS", status: "QUEUED" } });
+  if (waiting) {
+    const merged = [...new Set([...((waiting.payload as string[] | null) ?? []), ...draftIds])];
+    return db.draftJob.update({ where: { id: waiting.id }, data: { payload: merged } });
+  }
+  return db.draftJob.create({ data: { restaurantId, kind: "FOLLOWUPS", payload: draftIds } });
+}
+
 /** Targets in PITCH jobs that are waiting or running, for "Writing…" on the page. */
 export async function pitchesInProgress(restaurantId: string): Promise<Set<string>> {
   const jobs = await db.draftJob.findMany({ where: { restaurantId, kind: "PITCH", status: { in: ["QUEUED", "RUNNING"] } }, select: { payload: true } });
@@ -353,7 +366,9 @@ async function drain(kind: JobKind, maxJobs: number) {
               ? await leads!.suggestLeads(next.restaurantId)
               : next.kind === "PITCH"
                 ? await leads!.generatePitches(next.restaurantId, (next.payload as PitchTarget[] | null) ?? [])
-                : await buildDraftsFor(next.restaurantId);
+                : next.kind === "FOLLOWUPS"
+                  ? await (await import("@/lib/outreach")).writeFollowUps(next.restaurantId, (next.payload as string[] | null) ?? [])
+                  : await buildDraftsFor(next.restaurantId);
         await db.draftJob.update({ where: { id: next.id }, data: { status: "DONE", message, finishedAt: new Date(), runAfter: null } });
       } catch (err) {
         if (err instanceof AiBusyError) {

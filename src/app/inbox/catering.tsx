@@ -8,7 +8,9 @@ import { LIMITS } from "@/lib/llm/validate";
 import { approveDraft, setSkipReason, skipDraft, undoDraft } from "./actions";
 import { ActionButton } from "../leads/action-button";
 import { findContact } from "../leads/actions";
+import { mailFromEnv } from "@/lib/gmail";
 import { ContactForm } from "./contact-form";
+import { Sequence } from "./sequence";
 import { CopyEditor } from "./copy-editor";
 import { SourcePill, Tick, fmtValue } from "./parts";
 
@@ -41,9 +43,10 @@ export async function CateringTab({
   job: DraftJob | null;
   scan: LeadScan | null;
 }) {
+  const account = await db.gmailAccount.findUnique({ where: { restaurantId } });
   const drafts = await db.draft.findMany({
     where: { restaurantId, kind: "CATERING_PITCH" },
-    include: { lead: true, contact: true },
+    include: { lead: true, contact: true, emails: true },
     orderBy: [{ createdAt: "asc" }],
   });
   // Best leads first; decided ones sink to the bottom.
@@ -310,20 +313,7 @@ export async function CateringTab({
                   </form>
                 </div>
               )}
-              {selected.status === "APPROVED" && (
-                <div role="status" className="flex flex-wrap items-center gap-3 border-t border-sand bg-primary-soft px-6 py-5 text-primary-ink sm:px-7">
-                  <strong className="flex-[1_1_300px]">
-                    Approved. It will send from your Gmail once sending is turned on.
-                    {!selected.contact && " Add a contact first, or it can't be sent."}
-                  </strong>
-                  <form action={undoDraft}>
-                    <input type="hidden" name="id" value={selected.id} />
-                    <button type="submit" className="min-h-11 rounded-field border-2 border-primary px-4 font-bold">
-                      Undo
-                    </button>
-                  </form>
-                </div>
-              )}
+              {selected.status === "APPROVED" && <Sequence draft={selected} account={account} fake={mailFromEnv()?.name === "fake"} />}
               {selected.status === "SKIPPED" && (
                 <div role="status" className="flex flex-col gap-3 border-t border-sand bg-danger-soft px-6 py-5 text-[#5e2121] sm:px-7">
                   <div className="flex flex-wrap items-center gap-3">
