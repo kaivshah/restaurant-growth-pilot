@@ -26,6 +26,8 @@ async function main() {
   process.on("SIGINT", stop);
 
   console.log(`[worker] started; checking for jobs every ${POLL_MS / 1000}s`);
+  const { aiSummary } = await import("@/lib/llm/describe");
+  console.log(`[worker] ${aiSummary()}`);
   while (!stopping) {
     try {
       await requeueStaleJobs();
