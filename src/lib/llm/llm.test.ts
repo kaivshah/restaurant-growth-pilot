@@ -211,3 +211,36 @@ describe("writing many pitches at once", () => {
     expect([...out.values()].every((r) => !r.ok && r.retryable)).toBe(true);
   });
 });
+
+describe("Ollama", () => {
+  it("sends a large enough context, keeps the model loaded, and writes pitches in small batches", async () => {
+    const { ollamaProvider } = await import("./providers");
+    const bodies: { options: { num_ctx: number }; keep_alive: string; messages: { content: string }[] }[] = [];
+    const fetchMock = async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string);
+      bodies.push(body);
+      const items = [{ id: "a", headline: "Lunch for your team", body: "Hi, we cater team lunches nearby." }];
+      return new Response(JSON.stringify({ message: { content: JSON.stringify({ items }) }, prompt_eval_count: 900, eval_count: 300 }), { status: 200 });
+    };
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const p = ollamaProvider("http://localhost:11434", "qwen2.5:7b-instruct");
+      expect(p.batchSize).toBe(3);
+      const packet: FactsPacket = {
+        restaurant: { name: "Subway #00000", brand: "Subway", kind: "FRANCHISE" },
+        offer: { key: "pitch:free_delivery", title: "free delivery", schedule: "Send this week", audience: "Acme", copyLabel: "Email subject" },
+        facts: ["Free delivery with a first catering order"],
+        rules: { brandSafe: true, maxDiscountPct: 15, codePlaceholder: null },
+        pitch: { company: "Acme", contactFirstName: null, category: "office", distanceMiles: 1, offer: "free delivery", minOrder: 10, occasion: "Team lunches", event: null },
+      };
+      const res = await p.writeMany!([{ id: "a", packet }], new AbortController().signal);
+      expect(res.items[0].id).toBe("a");
+      expect(bodies[0].options.num_ctx).toBe(16384);
+      expect(bodies[0].keep_alive).toBe("30m");
+      expect(res.inputTokens).toBe(900);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});

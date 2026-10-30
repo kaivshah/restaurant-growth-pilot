@@ -35,6 +35,8 @@ AI jobs run one at a time, pitches first, so they don't compete for the free per
 
 **Checking the AI setup:** `npm run ai:check` sends one email-draft request and one tool call (like the analyst makes) using your `.env`, and prints which model answered and how long it took. The server terminal also prints every Gemini request: `[gemini] … answered in 4.2s`, waits for the free limit, and errors.
 
+**Running a local model with Ollama (free, no limits):** install [Ollama](https://ollama.com), run `ollama pull qwen2.5:7b-instruct`, then in `.env` set `LLM_PROVIDER="ollama"`, `ANALYST_PROVIDER="ollama"`, `AI_TIMEOUT_SECONDS="300"` and `WEB_EVENTS="off"` (the web event search needs Gemini). Nothing leaves your computer. It writes 3 pitches per request and is slower than Gemini (about 20–60 s per request on a MacBook); on an 8 GB Mac use `qwen2.5:3b` instead.
+
 **Switching to Claude:** set `LLM_PROVIDER="anthropic"`, `ANALYST_PROVIDER="anthropic"` and `ANTHROPIC_API_KEY`, then restart.
 
 ### Milestone 4: your own customer list, personal codes and results

@@ -92,8 +92,9 @@ export async function writeManyCopy(provider: CopyProvider, items: { id: string;
     await single(items);
     return out;
   }
-  for (let i = 0; i < items.length; i += BATCH_SIZE) {
-    const chunk = items.slice(i, i + BATCH_SIZE);
+  const size = provider.batchSize ?? BATCH_SIZE;
+  for (let i = 0; i < items.length; i += size) {
+    const chunk = items.slice(i, i + size);
     const started = Date.now();
     const base = { provider: provider.name, purpose: "write" as const };
     try {

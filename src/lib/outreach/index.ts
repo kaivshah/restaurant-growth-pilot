@@ -160,8 +160,9 @@ export async function writeFollowUps(restaurantId: string, draftIds: string[]): 
     if (packet) items.push({ id: d.id, packet, first: { subject: d.headline, body: d.body } });
   }
   let written = 0;
-  for (let i = 0; i < items.length; i += 8) {
-    const chunk = items.slice(i, i + 8);
+  const size = provider.batchSize ?? 8;
+  for (let i = 0; i < items.length; i += size) {
+    const chunk = items.slice(i, i + size);
     const started = Date.now();
     try {
       const res = await provider.writeFollowUps(chunk, AbortSignal.timeout(90_000));

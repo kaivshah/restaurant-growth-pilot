@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { ProviderError } from "@/lib/llm";
+import { AiConfigError, ProviderError } from "@/lib/llm";
 import { type GeminiContent, geminiGenerate, replyText, resolvedModel, usage } from "@/lib/llm/gemini";
+import { ollamaOptions } from "@/lib/llm/providers";
 import { parseRetryAfter } from "@/lib/llm/retry";
 import type { ToolSpec } from "./tools";
 
@@ -149,7 +150,7 @@ export function ollamaAnalyst(baseUrl: string, model: string): AnalystModel {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               signal,
-              body: JSON.stringify({ model, stream: false, messages, tools: toolDefs, options: { temperature: 0.3 } }),
+              body: JSON.stringify({ model, stream: false, messages, tools: toolDefs, keep_alive: "30m", options: ollamaOptions(0.3) }),
             });
           } catch (err) {
             messages.splice(messages.length - added.length, added.length);
@@ -158,6 +159,7 @@ export function ollamaAnalyst(baseUrl: string, model: string): AnalystModel {
           }
           if (!res.ok) {
             messages.splice(messages.length - added.length, added.length);
+            if (res.status === 404) throw new AiConfigError(`Ollama doesn't have the model "${model}". Run: ollama pull ${model}`);
             throw new ProviderError(`Ollama returned ${res.status}`, res.status === 429 || res.status >= 500, parseRetryAfter(res.headers.get("retry-after")));
           }
           const data = (await res.json()) as {

@@ -25,7 +25,8 @@ export async function withRetry<T>(
   const retries = opts.retries ?? 3;
   const base = opts.baseDelayMs ?? 1000;
   const maxDelay = opts.maxDelayMs ?? 20_000;
-  const timeoutMs = opts.timeoutMs ?? 30_000;
+  // AI_TIMEOUT_SECONDS raises every wait, for slow local models.
+  const timeoutMs = Math.max(opts.timeoutMs ?? 30_000, Number(process.env.AI_TIMEOUT_SECONDS ?? 0) * 1000);
   const sleep = opts.sleep ?? defaultSleep;
   const random = opts.random ?? Math.random;
 

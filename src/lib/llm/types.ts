@@ -42,6 +42,8 @@ export interface CopyProvider {
   /** e.g. "template", "ollama", "anthropic" */
   name: string;
   model: string;
+  /** Most pitches or follow-ups per request (default 8) */
+  batchSize?: number;
   write(packet: FactsPacket, signal: AbortSignal): Promise<WriteResult>;
   rewrite?(packet: FactsPacket, current: OfferCopy, instruction: string, signal: AbortSignal): Promise<WriteResult>;
   /** Several pitches from one restaurant in a single request (shared rules sent once) */

@@ -212,8 +212,14 @@ export function anthropicProvider(apiKey: string, model: string): CopyProvider {
 
 // ---------- Ollama (free, runs open models such as Qwen or Llama locally) ----------
 
+/**
+ * Ollama reads only the first 4,096 tokens of a request by default and drops
+ * the rest without saying so; a batch of pitches or the lead list needs more.
+ */
+export const ollamaOptions = (temperature: number, env: NodeJS.ProcessEnv = process.env) => ({ temperature, num_ctx: Number(env.OLLAMA_NUM_CTX ?? 16384) });
+
 export function ollamaProvider(baseUrl: string, model: string): CopyProvider {
-  async function call(user: string, signal: AbortSignal): Promise<WriteResult> {
+  async function chat(user: string, format: unknown, signal: AbortSignal): Promise<{ json: unknown; inputTokens?: number; outputTokens?: number }> {
     let res: Response;
     try {
       res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/chat`, {
@@ -223,8 +229,10 @@ export function ollamaProvider(baseUrl: string, model: string): CopyProvider {
         body: JSON.stringify({
           model,
           stream: false,
-          format: copyJsonSchema,
-          options: { temperature: 0.6 },
+          format,
+          // Keep the model loaded between requests so each one doesn't wait for it to load again.
+          keep_alive: "30m",
+          options: ollamaOptions(0.6),
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: user },
@@ -235,21 +243,41 @@ export function ollamaProvider(baseUrl: string, model: string): CopyProvider {
       if (signal.aborted) throw err;
       throw new ProviderError(`Can't reach Ollama at ${baseUrl}. Is it running?`, true);
     }
+    if (res.status === 404) throw new AiConfigError(`Ollama doesn't have the model "${model}". Run: ollama pull ${model}`);
     if (res.status === 429 || res.status >= 500) {
       throw new ProviderError(`Ollama returned ${res.status}`, true, parseRetryAfter(res.headers.get("retry-after")));
     }
     if (!res.ok) throw new ProviderError(`Ollama returned ${res.status}: ${(await res.text()).slice(0, 200)}`, false);
     const data = (await res.json()) as { message?: { content?: string }; prompt_eval_count?: number; eval_count?: number };
-    const parsed = CopySchema.safeParse(safeJson(data.message?.content));
+    return { json: safeJson(data.message?.content), inputTokens: data.prompt_eval_count, outputTokens: data.eval_count };
+  }
+
+  async function call(user: string, signal: AbortSignal): Promise<WriteResult> {
+    const { json, ...tokens } = await chat(user, copyJsonSchema, signal);
+    const parsed = CopySchema.safeParse(json);
     if (!parsed.success) throw new ProviderError("The local model returned copy we couldn't read", false);
-    return { ...parsed.data, inputTokens: data.prompt_eval_count, outputTokens: data.eval_count };
+    return { ...parsed.data, ...tokens };
   }
 
   return {
     name: "ollama",
     model,
+    // A laptop writes about 20 words a second, so smaller batches finish within the time limit.
+    batchSize: 3,
     write: (packet, signal) => call(writeRequest(packet), signal),
     rewrite: (packet, current, instruction, signal) => call(rewriteRequest(packet, current, instruction), signal),
+    async writeMany(items, signal) {
+      const { json, ...tokens } = await chat(batchPitchRequest(items), batchJsonSchema, signal);
+      const parsed = BatchSchema.safeParse(json);
+      if (!parsed.success) throw new ProviderError("The local model returned pitches we couldn't read", false);
+      return { items: parsed.data.items, ...tokens };
+    },
+    async writeFollowUps(items, signal) {
+      const { json, ...tokens } = await chat(followUpRequest(items), followUpJsonSchema, signal);
+      const parsed = FollowUpSchema.safeParse(json);
+      if (!parsed.success) throw new ProviderError("The local model returned follow-ups we couldn't read", false);
+      return { items: parsed.data.items, ...tokens };
+    },
   };
 }
 
