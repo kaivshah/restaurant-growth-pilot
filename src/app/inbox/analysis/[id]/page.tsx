@@ -42,7 +42,7 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
   const when = run.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" });
 
   return (
-    <AppShell current="inbox" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
+    <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       <div className="flex flex-col gap-2">
         <Link href={leadsRun ? "/inbox?tab=catering" : "/inbox"} className="font-bold">
           ← Back to the Approval Inbox

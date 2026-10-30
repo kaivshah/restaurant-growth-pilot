@@ -41,7 +41,7 @@ export default async function PipelinePage() {
   const contacted = deals.filter((d) => d.stage !== "SCHEDULED").length;
 
   return (
-    <AppShell current="pipeline" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
+    <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       <div className="flex flex-col gap-1">
         <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">Pipeline</h1>
         <p className="text-lg text-ink-2">

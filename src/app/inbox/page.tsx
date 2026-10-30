@@ -65,7 +65,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   ];
 
   return (
-    <AppShell current="inbox" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
+    <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       {(working || scanning) && <AutoRefresh />}
       <AiStatus job={tab === "catering" ? leadsJob : job} />
       <div className="flex flex-wrap items-start justify-between gap-4">

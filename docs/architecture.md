@@ -18,7 +18,7 @@ How the app keeps AI and API costs down and stays fast as more restaurants use i
 ```
 
 - **Web app:** renders pages from the database and never waits on an AI or external API in a page load. "Generate pitch", "Scan my area", "AI suggests" and "Refresh ideas" add a `DraftJob` row and return in ~100–300 ms; the page shows progress and refreshes itself.
-- **Workers:** take jobs off the queue. `claimNext` in `src/lib/drafts` uses `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED)`, so any number of workers can run without taking the same job. A restaurant never has two jobs of one kind running at once. Jobs stuck in RUNNING for 10 minutes (a crash) go back in the queue. Busy AI → the job waits 2–60 minutes and retries (`retryLater`).
+- **Workers:** take jobs off the queue. `claimNext` in `src/lib/drafts` uses `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED)`, so any number of workers can run without taking the same job. A restaurant never has two AI jobs running at once (scans run beside them). Jobs stuck in RUNNING for 10 minutes (a crash) go back in the queue. Busy AI → the job waits 2–60 minutes and retries (`retryLater`).
 - **Single machine / local dev:** leave `JOBS_IN_WEB` unset and the web app also runs jobs after each request. In production set `JOBS_IN_WEB="false"` on the web service and run one or more worker services.
 
 ## Not paying twice
@@ -49,7 +49,17 @@ Approved pitches become `OutboundEmail` rows (first email + two follow-ups) with
 
 Customer offers use the same path with their own table, `CustomerEmail`: "Send to customers" creates one `OfferCode` and one email per person in a single pass (`createMany`, unique on offer + customer, so pressing twice can't double-send), with send times any day 10 am–7 pm Pacific, a minute apart, under `customerDailyCap`. The same `runOutreach` pass claims them with `FOR UPDATE SKIP LOCKED`. Redeeming is one conditional update (`WHERE redeemedAt IS NULL`), so a code can't be used twice.
 
+## What the AI sees
+
+- **From Google Places** we request only these fields (the field mask keeps the bill and the data small): place id, name, address, coordinates, place types, website, phone, business status and review count. No reviews, photos, ratings or opening hours.
+- **From Ticketmaster / PredictHQ**: event title, category, start and end dates, venue name and address, coordinates, expected attendance (PredictHQ), organiser, a short description and a link.
+- **"AI suggests" sends one compact list**: for each business its name, category, distance, fit score, Google review count, whether it has a website and how many contacts we found (no addresses, phones or people); for each event its title, category, date, days ahead, venue, venue lead, attendance and distance; plus the owner's offer rules. About 80 businesses and 20 events fit in one request.
+- **A pitch** sends only that business's facts (name, first name of the contact, category, distance, the offer and the event if any).
+
 ## Rate limits
+
+- AI jobs (pitches, AI suggestions, follow-ups, offer ideas) run one at a time per restaurant, across every server and worker, pitches first. Area scans run beside them; they don't use the AI.
+- When Gemini Flash answers "high demand" (503), or hangs for 45 s or more, requests go to Gemini Flash-Lite for the next 5 minutes (`GEMINI_FALLBACK_MODEL`) instead of waiting on the busy model. Each AI request waits at most 90 s and is retried once; after that the job waits 2, 5, 10… minutes and tries again.
 
 - Every Gemini request is counted per Pacific day (`ApiUsage`). The daily limit is read from Google's `QuotaFailure` reply (or set with `GEMINI_RPD`); once it's used up nothing more is sent until midnight Pacific and waiting jobs resume then, instead of retries burning failed requests.
 - Gemini requests are spaced by `GEMINI_RPM` (default 10 for the free tier). The schedule is one `RateSlot` row in Postgres updated atomically, so all web servers and workers share one limit. After a 429, nobody sends until Google's delay has passed (capped at a minute; longer waits make the job retry later).

@@ -44,7 +44,7 @@ export const short = (text: string, max = 160) => (text.length > max ? `${text.s
  * browse. No AI picks and no pitches: the owner chooses what to pitch.
  * Returns a short summary for the job record.
  */
-export async function scanArea(restaurantId: string, opts: { force?: boolean; now?: Date } = {}): Promise<string> {
+export async function scanArea(restaurantId: string, opts: { force?: boolean; web?: boolean; now?: Date } = {}): Promise<string> {
   const now = opts.now ?? new Date();
   const restaurant = await db.restaurant.findUnique({ where: { id: restaurantId }, include: { outlets: true } });
   if (!restaurant) return "Restaurant not found.";
@@ -52,7 +52,8 @@ export async function scanArea(restaurantId: string, opts: { force?: boolean; no
   if (!outlet) return "Add your store address first.";
   const places = placesFromEnv();
   const events = eventsFromEnv();
-  const web = webEventsFromEnv();
+  // The web search is the scan's only AI request, so it runs only when asked for.
+  const web = opts.web || (process.env.WEB_EVENTS ?? "").toLowerCase() === "on" ? webEventsFromEnv() : null;
   if (!places) return "Area scan is off. Set PLACES_PROVIDER=google (with GOOGLE_MAPS_API_KEY) or PLACES_PROVIDER=fake.";
 
   const lastScan = await db.leadScan.findFirst({ where: { restaurantId, status: "DONE" }, orderBy: { createdAt: "desc" } });
@@ -279,6 +280,8 @@ export function toLeadInfo(l: LeadWithContacts): LeadInfo {
     reasons: l.scoreReasons,
     status: l.status,
     excludeReason: l.excludeReason,
+    reviews: l.ratingCount,
+    hasWebsite: Boolean(l.website),
     contacts: l.contacts.map((c) => ({ id: c.id, name: c.name, role: c.role, verification: c.verification })),
   };
 }
@@ -456,8 +459,9 @@ function citationsFor(p: Pitch, log: LeadOutcome["toolLog"]) {
 export type Suggestion = { leadId: string; eventId: string | null; offer: Pitch["offer"]; occasion: string; why: string; confidence: string; citations: { label: string; value: number; source: string }[] };
 
 /**
- * One SUGGEST job: the lead analyst looks at the scanned businesses and
- * events and marks the most promising ones, with reasons. Nothing is drafted.
+ * One SUGGEST job: one AI request with a compact list of the scanned
+ * businesses and events; the AI marks the most promising ones, with reasons.
+ * Nothing is drafted.
  * A run is reused while the leads, events and rules are unchanged.
  */
 export async function suggestLeads(restaurantId: string, now = new Date()): Promise<string> {
@@ -477,7 +481,8 @@ export async function suggestLeads(restaurantId: string, now = new Date()): Prom
   const run = await db.analysisRun.create({ data: { restaurantId, purpose: "leads", provider: analyst.provider, model: analyst.model, dataHash } });
   const started = Date.now();
   const outcome = await runLeadAnalysis(analyst, ctx, {
-    onTurn: (turn, lookups) => progress(restaurantId, "SUGGEST", `AI is looking through ${ctx.leads.length} businesses and ${ctx.events.length} events (step ${turn}, ${lookups} lookups)…`),
+    onTurn: (turn) =>
+      progress(restaurantId, "SUGGEST", `AI is ranking ${ctx.leads.length} businesses and ${ctx.events.length} events${turn > 1 ? " (fixing its answer)" : " (1 request)"}…`),
   });
   await logAnalysisCall(restaurantId, analyst, outcome, started, "lead-analysis");
   if (outcome.fatal || outcome.busy) {

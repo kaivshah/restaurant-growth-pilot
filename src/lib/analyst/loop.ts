@@ -38,8 +38,19 @@ export interface LoopConfig<C, S> {
   ctx: C;
   tools: ToolDef<unknown, C>[];
   submit: { name: string; description: string; jsonSchema: Record<string, unknown>; schema: ZodType<S, ZodTypeDef, unknown> };
+  /**
+   * Tool calls run here before the first request, with their results put in
+   * the first message. The model usually has everything it needs and submits
+   * in one request instead of spending a request on each lookup.
+   */
+  prefetch?: { name: string; input?: unknown }[];
+  /** Tools that may be prefetched but aren't offered to the model */
+  prefetchTools?: ToolDef<unknown, C>[];
   limits?: RunLimits;
 }
+
+/** The id a prefetched result is cited by, e.g. "data_1_get_rules". */
+export const prefetchId = (i: number, name: string) => `data_${i + 1}_${name}`;
 
 /**
  * Runs a tool-use conversation: the model calls read-only tools until it
@@ -51,15 +62,28 @@ export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, 
   const limits = cfg.limits ?? {};
   const maxToolCalls = limits.maxToolCalls ?? 12;
   // Each turn is one AI request; on a free tier a short budget matters more than a long exploration.
-  const maxTurns = limits.maxTurns ?? Number(process.env.ANALYST_MAX_TURNS ?? 10);
+  const maxTurns = limits.maxTurns ?? Number(process.env.ANALYST_MAX_TURNS ?? 4);
   const maxInputTokens = limits.maxInputTokens ?? 400_000;
   const byName = new Map(cfg.tools.map((t) => [t.name, t]));
   const out: LoopResult<S> = { status: "FAILED", toolLog: [], toolCalls: 0, turns: 0, inputTokens: 0, outputTokens: 0 };
   const fail = (error: string): LoopResult<S> => ({ ...out, status: "FAILED", error });
 
+  const data: string[] = [];
+  for (const [i, pre] of (cfg.prefetch ?? []).entries()) {
+    const tool = byName.get(pre.name) ?? cfg.prefetchTools?.find((t) => t.name === pre.name);
+    if (!tool) continue;
+    const id = prefetchId(i, pre.name);
+    const output = tool.run(cfg.ctx, tool.parse(pre.input ?? {}));
+    out.toolLog.push({ id, name: pre.name, input: pre.input ?? {}, output });
+    data.push(`[${id}] ${pre.name}: ${JSON.stringify(output)}`);
+  }
+  const user = data.length
+    ? `${cfg.user}\n\nData already looked up for you. Each line starts with its tool call id in brackets; cite that id in evidence.\n${data.join("\n")}`
+    : cfg.user;
+
   const session = model.start({
     system: cfg.system,
-    user: cfg.user,
+    user,
     tools: [
       ...cfg.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
       { name: cfg.submit.name, description: cfg.submit.description, inputSchema: cfg.submit.jsonSchema },
@@ -76,7 +100,7 @@ export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, 
     let turn;
     try {
       const current = input;
-      ({ value: turn } = await withRetry((signal) => session.send(current, signal), { timeoutMs: 120_000, retries: 2, ...limits.retry }));
+      ({ value: turn } = await withRetry((signal) => session.send(current, signal), { timeoutMs: 90_000, retries: 1, ...limits.retry }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.log(`[analyst] stopped at step ${out.turns}: ${message.slice(0, 200)}`);

@@ -255,11 +255,12 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
  * is already waiting. force makes a LEADS job search the area again even if
  * the last scan is recent.
  */
-export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFFERS", force = false) {
+export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFFERS", force = false, options?: { web?: boolean }) {
   const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind, status: "QUEUED" } });
+  const payload = options?.web ? { web: true } : undefined;
   // Asking again means "try now", even if the job was waiting for the AI.
-  if (waiting) return db.draftJob.update({ where: { id: waiting.id }, data: { force: waiting.force || force, runAfter: null } });
-  return db.draftJob.create({ data: { restaurantId, kind, force } });
+  if (waiting) return db.draftJob.update({ where: { id: waiting.id }, data: { force: waiting.force || force, runAfter: null, ...(payload ? { payload } : {}) } });
+  return db.draftJob.create({ data: { restaurantId, kind, force, payload } });
 }
 
 /**
@@ -272,16 +273,24 @@ export async function progress(restaurantId: string, kind: JobKind, text: string
   await db.draftJob.updateMany({ where: { restaurantId, kind, status: "RUNNING" }, data: { message: text } });
 }
 
-const draining = new Set<JobKind>();
+const draining = new Set<string>();
 
 /**
- * Processes queued jobs oldest first. Offer drafting and area scans run side
- * by side; within each kind, one job at a time. Safe to call often: a second
- * call while a kind is draining returns straight away, and each job is
- * claimed atomically so two servers can't run the same one.
+ * Jobs that call the AI run one at a time per restaurant (across all servers
+ * and workers), most urgent first: a pitch the owner is waiting for, then AI
+ * suggestions, follow-ups and offer ideas. Running them side by side only
+ * made them queue for the same per-minute limit and time out together.
+ */
+export const AI_LANE: JobKind[] = ["PITCH", "SUGGEST", "FOLLOWUPS", "OFFERS"];
+
+/**
+ * Processes queued jobs. Area scans (Google and event APIs) run beside the AI
+ * lane. Safe to call often: a second call while a lane is draining returns
+ * straight away, and each job is claimed atomically so two servers can't run
+ * the same one.
  */
 export async function processDraftJobs(maxJobs = 20) {
-  await Promise.all((["OFFERS", "LEADS", "SUGGEST", "PITCH", "FOLLOWUPS"] as const).map((kind) => drain(kind, maxJobs)));
+  await Promise.all([drain(["LEADS"], maxJobs), drain(AI_LANE, maxJobs)]);
   // Sending and reply checks ride along with every pass.
   await (await import("@/lib/outreach")).runOutreach();
 }
@@ -299,15 +308,15 @@ export function kickJobs() {
 /**
  * Claims the oldest runnable job of one kind. FOR UPDATE SKIP LOCKED lets any
  * number of workers claim jobs at the same time without taking the same one,
- * and a restaurant never has two jobs of one kind running at once.
+ * and a restaurant never has two jobs of one lane running at once.
  */
-async function claimNext(kind: JobKind): Promise<DraftJob | null> {
+async function claimNext(kind: JobKind, lane: JobKind[]): Promise<DraftJob | null> {
   const rows = await db.$queryRaw<DraftJob[]>`
     UPDATE "DraftJob" SET status = 'RUNNING', "startedAt" = now(), attempts = attempts + 1
     WHERE id = (
       SELECT j.id FROM "DraftJob" j
       WHERE j.kind = ${kind}::"JobKind" AND j.status = 'QUEUED' AND (j."runAfter" IS NULL OR j."runAfter" <= now())
-        AND NOT EXISTS (SELECT 1 FROM "DraftJob" r WHERE r."restaurantId" = j."restaurantId" AND r.kind = j.kind AND r.status = 'RUNNING')
+        AND NOT EXISTS (SELECT 1 FROM "DraftJob" r WHERE r."restaurantId" = j."restaurantId" AND r.kind::text = ANY(${lane}::text[]) AND r.status = 'RUNNING')
       ORDER BY j."createdAt"
       LIMIT 1
       FOR UPDATE SKIP LOCKED
@@ -350,18 +359,28 @@ export async function pitchesInProgress(restaurantId: string): Promise<Set<strin
   return new Set(jobs.flatMap((j) => ((j.payload as PitchTarget[] | null) ?? []).map((t) => t.eventId ?? t.leadId ?? "")));
 }
 
-async function drain(kind: JobKind, maxJobs: number) {
-  if (draining.has(kind)) return;
-  draining.add(kind);
+/** Claims the most urgent runnable job in a lane. */
+async function claimInLane(lane: JobKind[]) {
+  for (const kind of lane) {
+    const job = await claimNext(kind, lane);
+    if (job) return job;
+  }
+  return null;
+}
+
+async function drain(lane: JobKind[], maxJobs: number) {
+  const key = lane.join(",");
+  if (draining.has(key)) return;
+  draining.add(key);
   try {
     for (let i = 0; i < maxJobs; i++) {
-      const next = await claimNext(kind);
+      const next = await claimInLane(lane);
       if (!next) return;
       try {
         const leads = next.kind === "OFFERS" ? null : await import("@/lib/leads");
         const message =
           next.kind === "LEADS"
-            ? await leads!.scanArea(next.restaurantId, { force: next.force })
+            ? await leads!.scanArea(next.restaurantId, { force: next.force, web: (next.payload as { web?: boolean } | null)?.web })
             : next.kind === "SUGGEST"
               ? await leads!.suggestLeads(next.restaurantId)
               : next.kind === "PITCH"
@@ -382,7 +401,7 @@ async function drain(kind: JobKind, maxJobs: number) {
       }
     }
   } finally {
-    draining.delete(kind);
+    draining.delete(key);
   }
 }
 

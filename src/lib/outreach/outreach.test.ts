@@ -72,7 +72,10 @@ describe("secrets and links", () => {
     const sealed = encrypt("1//refresh-token");
     expect(sealed).not.toContain("refresh");
     expect(decrypt(sealed)).toBe("1//refresh-token");
-    expect(() => decrypt(sealed.replace(/.$/, (c) => (c === "A" ? "B" : "A")))).toThrow();
+    // Change a character in the middle: the last base64 character can carry only padding bits.
+    const mid = Math.floor(sealed.length / 2);
+    const tampered = sealed.slice(0, mid) + (sealed[mid] === "A" ? "B" : "A") + sealed.slice(mid + 1);
+    expect(() => decrypt(tampered)).toThrow();
   });
 
   it("signs unsubscribe links so they can't be forged", () => {

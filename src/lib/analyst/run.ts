@@ -47,6 +47,15 @@ export async function runAnalysis(
     user: analystRequest(ctx, baseline),
     ctx,
     tools: DATA_TOOLS,
+    // The usual first lookups, sent with the request so most runs need one AI request.
+    prefetch: [
+      { name: "list_reports" },
+      { name: "get_rules" },
+      { name: "get_week_summary" },
+      { name: "get_hourly_sales" },
+      { name: "get_day_totals" },
+      { name: "get_past_decisions" },
+    ],
     submit: {
       name: "submit_analysis",
       description: "Submit your findings, offer proposals and decisions on the standard ideas. Call once, at the end.",

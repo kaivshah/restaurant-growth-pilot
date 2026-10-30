@@ -16,7 +16,18 @@ Everything is written and decided by a real AI model; there are no pre-written d
 
 Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 
-**Speed:** requests are spaced to stay under the free per-minute limit (`GEMINI_RPM`, default 10), so a first run (offer analysis, offer emails, lead analysis and up to 15 pitches, roughly 30–40 requests) takes a few minutes. Offer drafting and the area scan run side by side, pitches appear in the inbox one by one, and the page and the server terminal show each step (`[scan] Writing pitch 4 of 15…`). On a paid Gemini project or Claude, raise `GEMINI_RPM` or switch providers for faster runs.
+**When the AI is used** (and nothing else calls it):
+
+| Action | AI requests |
+|---|---|
+| Scan my area | None. Google Places and the event APIs only. |
+| Search the web for events (Events tab) | 1 (Gemini with Google Search), cached for a day |
+| AI suggests | 1: a short list of the scanned businesses and events goes with the request; the AI returns the 20 best (`AI_SUGGESTIONS`) with a reason each. No pitches are written. Unchanged data reuses the last answer. |
+| Generate pitch | 1 per 8 pitches |
+| Approving a pitch | 1 per 8 pitches, for the two follow-ups |
+| Offer ideas (after reports are confirmed, or Refresh ideas) | Usually 1–2 for the analysis, plus 1 per offer email |
+
+AI jobs run one at a time, pitches first, so they don't compete for the free per-minute limit (`GEMINI_RPM`, default 10). When Gemini Flash is overloaded ("high demand", 503), requests switch to Gemini Flash-Lite for 5 minutes (`GEMINI_FALLBACK_MODEL`). The server terminal shows each request (`[gemini] … answered in 4.2s`).
 
 **Free limits:** Gemini's free tier allows a limited number of requests per minute and per day (see your quota in AI Studio). A full refresh uses roughly 10–25 requests. When a limit is hit, the job waits and tries again after 2, 5, 10, 20, 30 and 60 minutes (or longer if Google asks), and the inbox shows "The AI is busy… we'll try again at 3:40 pm". Drafts already written are kept, and **Refresh ideas** / **Scan my area** tries again straight away. Retries happen while the app is open in a browser.
 
@@ -80,7 +91,7 @@ The **Catering** tab in the Approval Inbox holds the generated pitches: fit scor
 | Service | Variable | Notes |
 |---|---|---|
 | Google Maps Platform | `GOOGLE_MAPS_API_KEY`, `PLACES_PROVIDER=google` | Enable the Geocoding API and Places API (New). A scan makes about 7 calls, plus up to 15 to place web-search events. |
-| Gemini web search | `GEMINI_API_KEY` (`WEB_EVENTS="off"` turns it off) | One grounded search per scan. Google gives a separate free allowance for search grounding (reported as 5,000 a month for Gemini 3 models). |
+| Gemini web search | `GEMINI_API_KEY` (`WEB_EVENTS="off"` hides it, `"on"` runs it on every scan) | One grounded search when you click "Search the web for events". Google gives a separate free allowance for search grounding (reported as 5,000 a month for Gemini 3 models). |
 | Hunter.io | `HUNTER_API_KEY`, `CONTACTS_PROVIDER=hunter` | Free plan: 50 credits a month. Used only when you generate a pitch for a business without a contact (one search plus one email check); a domain isn't searched again for 30 days. |
 | PredictHQ | `PREDICTHQ_API_KEY`, `PREDICTHQ_LOCATION_ID` | Conferences and expos with attendance. The free plan searches saved locations only. |
 | Ticketmaster Discovery | `TICKETMASTER_API_KEY` | Free, 5,000 calls a day. Ticketed games and concerts. |

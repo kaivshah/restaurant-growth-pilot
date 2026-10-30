@@ -5,13 +5,17 @@ process.env.GEMINI_RPM = "0";
 import { geminiAnalyst } from "@/lib/analyst/models";
 import { AiBusyError, AiConfigError, writeOfferCopy } from "@/lib/llm";
 import { jobState, retryLater } from "@/lib/drafts";
-import { geminiError, geminiInterval, replacementFor, simplifySchema } from "./gemini";
+import { geminiError, geminiInterval, replacementFor, resetOverload, simplifySchema } from "./gemini";
 import { geminiProvider } from "./providers";
 import { ProviderError } from "./types";
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  resetOverload();
+  delete process.env.GEMINI_FALLBACK_MODEL;
+});
 
 describe("Gemini errors", () => {
   it("reads the retry delay from a 429", () => {
@@ -84,6 +88,7 @@ describe("Gemini analyst", () => {
   });
 
   it("forgets a turn that failed, so the retry resends it once", async () => {
+    process.env.GEMINI_FALLBACK_MODEL = "off";
     let n = 0;
     const bodies: { contents: unknown[] }[] = [];
     vi.stubGlobal(
@@ -152,6 +157,28 @@ describe("retired Gemini models", () => {
     const out = await writeOfferCopy(geminiProvider("bad", "gemini-3.8-flash"), packet, { sleep: async () => {}, timeoutMs: 1000 });
     expect(out).toMatchObject({ ok: false, fatal: true, retryable: false });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an overloaded model", () => {
+  it("answers from Flash-Lite when Flash says high demand, and keeps using it for a while", async () => {
+    resetOverload();
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return url.includes("/gemini-flash-latest:")
+          ? reply({ error: { code: 503, status: "UNAVAILABLE", message: "This model is currently experiencing high demand." } }, 503)
+          : reply(okCopy);
+      }),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const p = geminiProvider("key", "gemini-flash-latest");
+    await p.write(packet, new AbortController().signal);
+    await p.write(packet, new AbortController().signal);
+    expect(urls.map((u) => u.match(/models\/([^:]+)/)?.[1])).toEqual(["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-flash-lite-latest"]);
+    resetOverload();
   });
 });
 

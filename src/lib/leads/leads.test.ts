@@ -250,6 +250,8 @@ describe("lead analyst run", () => {
   it("keeps the scripted analyst's valid pitches and blocks the invented lead", async () => {
     const out = await runLeadAnalysis(fakeLeadAnalyst(), leadCtx());
     expect(out.status).toBe("DONE");
+    expect(out.turns).toBe(1); // one AI request: the data goes with it
+    expect(out.toolLog.map((c) => c.name)).toEqual(["get_rules", "list_leads", "get_local_events"]);
     expect(out.pitches.map((p) => p.lead_id)).toEqual(["L1", "L2"]);
     expect(out.pitches[1].event_id).toBe("E1");
     expect(out.rejected).toHaveLength(1);

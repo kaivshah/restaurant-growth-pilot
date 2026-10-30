@@ -1,10 +1,25 @@
 import { Logo } from "@/components/ui";
+import { db } from "@/lib/db";
 import { getRestaurant, requireUserId } from "@/lib/restaurant";
+import { AppShell } from "../inbox/shell";
 import { StepProgress, Stepper } from "./steps";
 
+/**
+ * The first time through, these pages are a four-step wizard. After setup
+ * they are the Settings pages, inside the app with the main menu.
+ */
 export default async function SetupLayout({ children }: { children: React.ReactNode }) {
   const userId = await requireUserId();
   const restaurant = await getRestaurant(userId);
+
+  if (restaurant?.setupCompletedAt) {
+    const pending = await db.draft.count({ where: { restaurantId: restaurant.id, status: "PENDING" } });
+    return (
+      <AppShell settings pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
+        {children}
+      </AppShell>
+    );
+  }
 
   return (
     <div className="min-h-screen">

@@ -34,7 +34,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
   ]);
 
   return (
-    <AppShell current="customers" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
+    <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       <div className="flex flex-col gap-1">
         <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">Customers</h1>
         <p className="max-w-[70ch] text-lg text-ink-2">

@@ -1,46 +1,36 @@
-import type { AnalystModel, ToolCall, ToolResult } from "../models";
+import type { AnalystModel, ToolCall } from "../models";
 
 /**
- * Scripted lead analyst for tests and ANALYST_PROVIDER=fake: looks at the
- * leads and events, pitches the best office and an event venue, and submits
+ * Scripted lead analyst for tests and ANALYST_PROVIDER=fake: reads the
+ * leads and events sent with the request, picks the best office and an event venue, and submits
  * one pitch for a lead that doesn't exist, so the checks can be seen working.
  */
 export function fakeLeadAnalyst(): AnalystModel {
   return {
     provider: "fake",
     model: "scripted",
-    start() {
-      let step = 0;
+    start({ user }) {
+      // The data comes with the request: "[data_2_list_leads] list_leads: {…}"
       const seen = new Map<string, { id: string; output: Record<string, unknown> }>();
-      const call = (name: string, input: unknown = {}): ToolCall => ({ id: `fake_${step}_${name}`, name, input });
+      for (const m of user.matchAll(/^\[(\S+)\] (\w+): (.*)$/gm)) seen.set(m[2], { id: m[1], output: JSON.parse(m[3]) });
+      const call = (name: string, input: unknown = {}): ToolCall => ({ id: `fake_${name}`, name, input });
       return {
-        async send(input) {
-          if (Array.isArray(input)) {
-            for (const r of input as ToolResult[]) if (!r.isError) seen.set(r.name, { id: r.id, output: JSON.parse(r.content) });
-          }
-          step++;
+        async send() {
           const turn = (toolCalls: ToolCall[]) => ({ toolCalls, text: "", inputTokens: 1500, outputTokens: 200 });
-          if (step === 1) return turn([call("list_leads"), call("get_rules"), call("get_local_events")]);
-
           const list = seen.get("list_leads");
           const events = seen.get("get_local_events");
           const leads = (list?.output.leads ?? []) as { lead_id: string; name: string; category: string; fit_score: number; distance_miles: number; contacts: number }[];
           const evs = (events?.output.events ?? []) as { event_id: string; title: string; venue_lead_id: string | null; attendance: number | null }[];
           const best = leads.find((l) => l.category === "office" && l.contacts > 0) ?? leads[0];
-          if (step === 2 && best) return turn([call("get_lead", { lead_id: best.lead_id })]);
-
-          const detail = seen.get("get_lead");
-          const contacts = (detail?.output.contacts ?? []) as { contact_id: string }[];
           const bi = leads.indexOf(best);
           const ev = evs.findIndex((e) => e.venue_lead_id && e.attendance);
           const pitches: unknown[] = [];
           if (best && list) {
             pitches.push({
               lead_id: best.lead_id,
-              contact_id: contacts[0]?.contact_id,
               offer: "free_cookie_platter",
               occasion: "Weekly team lunches",
-              why: `${best.name} is the best-scoring office nearby (fit score ${best.fit_score}) and only ${best.distance_miles} mi away, and we found a person who arranges food.`,
+              why: `${best.name} is the best office nearby, only ${best.distance_miles} mi away, and we found a person who arranges food.`,
               confidence: "high",
               evidence: [
                 { tool_call_id: list.id, field: `leads[${bi}].fit_score`, value: best.fit_score, label: "Fit score" },

@@ -43,6 +43,17 @@ export async function saveRestaurant(_prev: FormState, formData: FormData): Prom
   };
 
   const existing = await getRestaurant(userId);
+  if (existing?.setupCompletedAt) {
+    const moved = existing.outlets[0]?.address !== address || existing.radiusMiles !== data.radiusMiles;
+    await db.restaurant.update({ where: { id: existing.id }, data });
+    if (existing.outlets[0]) await db.outlet.update({ where: { id: existing.outlets[0].id }, data: { address } });
+    // A new address or radius means a new area to search (Google and event APIs only, no AI).
+    if (moved) {
+      await enqueueDraftJob(existing.id, "LEADS", true);
+      after(() => kickJobs());
+    }
+    redirect("/setup/restaurant?saved=1");
+  }
   if (existing) {
     await db.restaurant.update({ where: { id: existing.id }, data });
     const outlet = existing.outlets[0];
@@ -143,7 +154,7 @@ export async function confirmNumbers(formData: FormData) {
     await enqueueDraftJob(restaurant.id);
     after(() => kickJobs());
   }
-  redirect(flaggedTypes.size > 0 ? "/setup/reports?flagged=1" : "/setup/menu");
+  redirect(flaggedTypes.size > 0 ? "/setup/reports?flagged=1" : restaurant.setupCompletedAt ? "/setup/reports?saved=1" : "/setup/menu");
 }
 
 const rulesSchema = z.object({
@@ -173,5 +184,5 @@ export async function saveRules(_prev: FormState, formData: FormData): Promise<F
   await enqueueDraftJob(restaurant.id);
   await enqueueDraftJob(restaurant.id, "LEADS");
   after(() => kickJobs());
-  redirect("/inbox");
+  redirect(restaurant.setupCompletedAt ? "/setup/rules?saved=1" : "/inbox");
 }

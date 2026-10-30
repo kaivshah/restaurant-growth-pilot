@@ -21,7 +21,7 @@ function FieldError({ message }: { message?: string }) {
   return message ? <p className="text-sm font-semibold text-danger">{message}</p> : null;
 }
 
-export function RestaurantForm({ defaults }: { defaults: Defaults }) {
+export function RestaurantForm({ defaults, settings = false }: { defaults: Defaults; settings?: boolean }) {
   const [state, action, pending] = useActionState(saveRestaurant, undefined);
   const [kind, setKind] = useState(defaults.kind);
   const [radius, setRadius] = useState(defaults.radiusMiles);
@@ -93,7 +93,7 @@ export function RestaurantForm({ defaults }: { defaults: Defaults }) {
 
           <div className="flex justify-end border-t border-sand pt-6">
             <Button type="submit" disabled={pending}>
-              {pending ? "Saving…" : "Save and continue"}
+              {pending ? "Saving…" : settings ? "Save changes" : "Save and continue"}
             </Button>
           </div>
         </form>

@@ -1,10 +1,12 @@
-import { Card } from "@/components/ui";
+import { Card, Notice } from "@/components/ui";
 import { db } from "@/lib/db";
 import { requireRestaurant } from "@/lib/restaurant";
 import { RulesForm } from "./rules-form";
 
-export default async function RulesStep() {
+export default async function RulesStep({ searchParams }: { searchParams: Promise<{ saved?: string }> }) {
   const restaurant = await requireRestaurant();
+  const settings = Boolean(restaurant.setupCompletedAt);
+  const { saved } = await searchParams;
   const adjCogs = await db.reportUpload.findFirst({
     where: { restaurantId: restaurant.id, reportType: "wisrAdjCogs" },
     orderBy: { periodEnd: "desc" },
@@ -16,13 +18,15 @@ export default async function RulesStep() {
   return (
     <>
       <div className="flex flex-col gap-2">
-        <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">Set the rules every draft follows</h1>
+        <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">{settings ? "Offer rules" : "Set the rules every draft follows"}</h1>
         <p className="max-w-[62ch] text-muted">
           We check each catering pitch and customer offer against these rules before it reaches your inbox. You can change them any time.
         </p>
       </div>
+      {saved && <Notice tone="green">Saved. Offer ideas and pitch suggestions will follow the new rules.</Notice>}
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <RulesForm
+          settings={settings}
           discountPct={discountPct}
           defaults={{
             promoApproval: restaurant.promoApproval,

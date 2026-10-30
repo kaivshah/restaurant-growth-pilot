@@ -29,9 +29,9 @@ function weekLabel(start: Date | null, end: Date | null) {
   return start ? `${fmtDate(start)} – ${fmtDate(end)}` : `Week ending ${fmtDate(end)}`;
 }
 
-export default async function ReportsStep({ searchParams }: { searchParams: Promise<{ flagged?: string }> }) {
+export default async function ReportsStep({ searchParams }: { searchParams: Promise<{ flagged?: string; saved?: string }> }) {
   const restaurant = await requireRestaurant();
-  const { flagged } = await searchParams;
+  const { flagged, saved } = await searchParams;
   const uploads = await db.reportUpload.findMany({
     where: { restaurantId: restaurant.id },
     orderBy: [{ periodEnd: "desc" }, { createdAt: "desc" }],
@@ -92,12 +92,13 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
   return (
     <>
       <div className="flex flex-col gap-2">
-        <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">Add your weekly reports</h1>
+        <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">{restaurant.setupCompletedAt ? "Sales reports" : "Add your weekly reports"}</h1>
         <p className="max-w-[62ch] text-muted">
           Export them from your back office as CSV or Excel. We read the numbers, show you what we found, and use them only after you confirm.
         </p>
       </div>
 
+      {saved && <Notice tone="green">Thanks. New offer ideas from these numbers will appear in the Approval Inbox.</Notice>}
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="flex flex-col gap-6">
           <UploadBox />
@@ -144,7 +145,7 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
                 )}
                 {weekConfirmed && !flagged && <Notice tone="green">You confirmed these numbers.</Notice>}
                 <button type="submit" className="inline-flex min-h-[52px] items-center justify-center rounded-field bg-primary px-6 font-bold text-white hover:bg-primary-hover">
-                  Save and continue
+                  {restaurant.setupCompletedAt ? "Confirm these numbers" : "Save and continue"}
                 </button>
               </form>
             )}

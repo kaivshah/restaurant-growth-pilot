@@ -9,7 +9,8 @@ import { jobState, kickJobs, pitchesInProgress, requeueStaleJobs } from "@/lib/d
 import { latestSuggestions, mapsUrl } from "@/lib/leads";
 import { LEAD_SKIP_REASONS, categoryLabel } from "@/lib/leads/score";
 import { requireRestaurant } from "@/lib/restaurant";
-import { scanMyArea } from "../inbox/actions";
+import { scanMyArea, searchWebEvents } from "../inbox/actions";
+import { webEventsFromEnv } from "@/lib/events/web";
 import { AiStatus } from "../inbox/ai-status";
 import { AutoRefresh } from "../inbox/auto-refresh";
 import { AppShell } from "../inbox/shell";
@@ -103,6 +104,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const pitching = jobState(pitchJob) === "working";
   const recentPitchJob = pitchJob && pitchJob.finishedAt && now.getTime() - pitchJob.finishedAt.getTime() < 10 * 60_000 ? pitchJob : null;
   const aiOn = Boolean(analystFromEnv("leads"));
+  const webOn = Boolean(webEventsFromEnv());
   const pitchFor = (leadId: string | null, eventId: string | null) => pitches.find((p) => (eventId ? p.eventId === eventId : p.leadId === leadId && !p.eventId));
   const aiFor = (leadId: string | null, eventId: string | null) => {
     const s = leadId ? suggestions.byLead.get(leadId) : undefined;
@@ -131,7 +133,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const waitingJob = [pitchJob, suggestJob].find((j) => jobState(j) === "waiting") ?? scanJob;
 
   return (
-    <AppShell current="leads" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
+    <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       {(scanning || suggesting || pitching) && <AutoRefresh />}
       {/* Row checkboxes and buttons belong to this form through their form="bulk" attribute. */}
       <form id="bulk" action={queuePitches} />
@@ -298,10 +300,20 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       </div>
 
       {view === "events" && (
-        <p className="text-sm text-muted">
-          {events.length} {events.length === 1 ? "event" : "events"} between {fmtDay(window.gte < now ? now : window.gte)} and {fmtDay(window.lte)}
-          {custom ? " (custom dates)" : ""}. Events less than a week away are marked short notice.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted">
+            {events.length} {events.length === 1 ? "event" : "events"} between {fmtDay(window.gte < now ? now : window.gte)} and {fmtDay(window.lte)}
+            {custom ? " (custom dates)" : ""}. Events less than a week away are marked short notice.
+          </p>
+          {webOn && (
+            <form action={searchWebEvents} className="flex items-center gap-2">
+              <span className="text-[13px] text-muted">Conferences and company events that aren&apos;t on Ticketmaster:</span>
+              <button type="submit" disabled={scanning} className="min-h-10 rounded-field border border-field bg-surface px-3 text-sm font-bold hover:border-primary disabled:opacity-60">
+                Search the web for events (1 AI request)
+              </button>
+            </form>
+          )}
+        </div>
       )}
       {view === "events" ? (
         events.length === 0 ? (
@@ -309,7 +321,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             {eventCount === 0
               ? scanning
                 ? "Searching…"
-                : "No upcoming events found yet. Click “Scan my area”; events come from a web search (with your Gemini key) and, if you add their keys, Ticketmaster and PredictHQ."
+                : webOn
+                  ? "No upcoming events yet. Events come from Ticketmaster and PredictHQ (add their keys), or click “Search the web for events” (uses 1 AI request)."
+                  : "No upcoming events yet. Events come from Ticketmaster and PredictHQ; add their keys in .env and scan again."
               : "No events match these filters."}
           </Card>
         ) : (

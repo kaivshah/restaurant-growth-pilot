@@ -144,8 +144,10 @@ export function fakeWebEvents(): WebEventsProvider {
 }
 
 /**
- * Web event search: on with a Gemini key (WEB_EVENTS="off" turns it off),
- * sample events when EVENTS_PROVIDER=fake.
+ * Web event search (one Gemini request with Google Search). Runs only when
+ * the owner clicks "Search the web for events", or on every scan with
+ * WEB_EVENTS="on"; WEB_EVENTS="off" hides it. Sample events when
+ * EVENTS_PROVIDER=fake.
  */
 export function webEventsFromEnv(env: NodeJS.ProcessEnv = process.env): WebEventsProvider | null {
   const choice = (env.WEB_EVENTS ?? "").toLowerCase();

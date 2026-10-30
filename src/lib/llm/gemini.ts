@@ -69,6 +69,32 @@ export function geminiError(status: number, body: unknown): ProviderError | AiCo
 /** Google's alias for its current Flash model. */
 export const LATEST_FLASH = "gemini-flash-latest";
 
+/**
+ * When the main model is overloaded (503 "high demand", or a request that
+ * hangs past 45 s), requests go to this lighter model for a few minutes
+ * instead of waiting on the busy one. GEMINI_FALLBACK_MODEL="off" disables it.
+ */
+export const fallbackModel = (env: NodeJS.ProcessEnv = process.env) => {
+  const m = env.GEMINI_FALLBACK_MODEL ?? "gemini-flash-lite-latest";
+  return m && m.toLowerCase() !== "off" ? m : null;
+};
+const OVERLOAD_MS = 5 * 60_000;
+let overloadedUntil = 0;
+
+function markOverloaded(model: string, why: string) {
+  const fb = fallbackModel();
+  if (!fb || fb === model) return;
+  if (overloadedUntil < Date.now()) console.log(`[gemini] ${model} is overloaded (${why}); using ${fb} for the next ${OVERLOAD_MS / 60_000} minutes`);
+  overloadedUntil = Date.now() + OVERLOAD_MS;
+}
+
+/** For tests. */
+export function resetOverload() {
+  overloadedUntil = 0;
+}
+
+const isOverload = (err: unknown) => err instanceof ProviderError && !(err instanceof GeminiQuotaError) && /unavailable \((503|500|502|504)\)|overloaded|high demand/i.test(err.message);
+
 /** Models that turned out to be retired, mapped to the one that worked instead. */
 const replaced = new Map<string, string>();
 
@@ -110,9 +136,16 @@ export async function geminiGenerate(apiKey: string, model: string, req: GeminiR
   // Daily quota used up: don't send anything (each attempt would just fail); the job waits for the reset.
   const blocked = await dailyBlock("gemini");
   if (blocked) throw new ProviderError(`Gemini paused: ${blocked.message}`, true, blocked.waitMs);
+  const fb = fallbackModel();
+  if (fb && overloadedUntil > Date.now() && fb !== resolvedModel(model)) return generateWith(apiKey, fb, req, signal);
   try {
     return await generateWith(apiKey, resolvedModel(model), req, signal);
   } catch (err) {
+    // Busy model: answer from the lighter one now rather than retrying the busy one.
+    if (isOverload(err) && fb && fb !== resolvedModel(model) && !signal.aborted) {
+      markOverloaded(resolvedModel(model), "503");
+      return generateWith(apiKey, fb, req, signal);
+    }
     if (!(err instanceof AiConfigError) || !err.message.startsWith("Gemini model not available")) throw err;
     const next = replacementFor(resolvedModel(model), err.message);
     if (!next) throw err;
@@ -208,7 +241,10 @@ async function generateWith(apiKey: string, model: string, req: GeminiRequest, s
     console.log(`[gemini] ${model} answered in ${((Date.now() - started) / 1000).toFixed(1)}s`);
     return out;
   } catch (err) {
-    console.log(`[gemini] ${model} ${signal.aborted ? `gave no answer within the time limit (${Math.round((Date.now() - started) / 1000)}s)` : `failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`}`);
+    const took = Date.now() - started;
+    console.log(`[gemini] ${model} ${signal.aborted ? `gave no answer within the time limit (${Math.round(took / 1000)}s)` : `failed: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`}`);
+    // A request that hung this long means the model is swamped: the retry goes to the lighter model.
+    if (signal.aborted && took > 45_000) markOverloaded(model, `no answer in ${Math.round(took / 1000)}s`);
     throw err;
   } finally {
     clearInterval(slow);

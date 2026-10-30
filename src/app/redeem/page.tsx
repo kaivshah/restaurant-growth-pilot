@@ -13,7 +13,7 @@ export default async function RedeemPage() {
     db.offerCode.count({ where: { restaurantId: restaurant.id, redeemedAt: { gte: new Date(Date.now() - 86_400_000) } } }),
   ]);
   return (
-    <AppShell current="redeem" pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
+    <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
       <div className="flex flex-col gap-1">
         <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">Redeem a code</h1>
         <p className="text-lg text-ink-2">Type the code from the customer&apos;s email. {today} used in the last 24 hours.</p>

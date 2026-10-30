@@ -31,7 +31,7 @@ const OFFER_TYPES = [
 const optionClass =
   "flex min-h-[52px] cursor-pointer items-center gap-3 rounded-field border border-field bg-surface px-4 has-[:checked]:border-2 has-[:checked]:border-primary has-[:checked]:bg-primary-soft has-[:checked]:font-bold";
 
-export function RulesForm({ defaults, discountPct }: { defaults: Defaults; discountPct: number | null }) {
+export function RulesForm({ defaults, discountPct, settings = false }: { defaults: Defaults; discountPct: number | null; settings?: boolean }) {
   const [state, action, pending] = useActionState(saveRules, undefined);
   const [approval, setApproval] = useState(defaults.promoApproval);
   const [maxDiscount, setMaxDiscount] = useState(defaults.maxDiscountPct);
@@ -115,18 +115,28 @@ export function RulesForm({ defaults, discountPct }: { defaults: Defaults; disco
         <div className="flex flex-col gap-2 border-t border-sand pt-6">
           <p className="font-bold">Send from your own email</p>
           <p className="text-sm text-muted">
-            Connect Gmail on the Email sending page after setup. Nothing will ever be sent until you approve it.
+            {settings ? (
+              <>
+                Connect Gmail on the <Link href="/settings/email">Email sending</Link> tab. Nothing is ever sent until you approve it.
+              </>
+            ) : (
+              "Connect Gmail on the Email sending page after setup. Nothing will ever be sent until you approve it."
+            )}
           </p>
         </div>
 
         {state?.error && <Notice tone="danger">{state.error}</Notice>}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-sand pt-6">
-          <Link href="/setup/menu" className="inline-flex min-h-[52px] items-center px-2 font-bold text-primary">
-            Back
-          </Link>
+          {settings ? (
+            <span />
+          ) : (
+            <Link href="/setup/menu" className="inline-flex min-h-[52px] items-center px-2 font-bold text-primary">
+              Back
+            </Link>
+          )}
           <Button type="submit" disabled={pending}>
-            {pending ? "Saving…" : "Finish setup"}
+            {pending ? "Saving…" : settings ? "Save changes" : "Finish setup"}
           </Button>
         </div>
       </form>

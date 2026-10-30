@@ -176,6 +176,14 @@ export async function scanMyArea() {
   revalidatePath("/leads");
 }
 
+/** "Search the web for events": a scan that also runs the one-request Gemini web search. */
+export async function searchWebEvents() {
+  const restaurant = await requireRestaurant();
+  await enqueueDraftJob(restaurant.id, "LEADS", true, { web: true });
+  after(() => kickJobs());
+  revalidatePath("/leads");
+}
+
 export async function refreshIdeas() {
   const restaurant = await requireRestaurant();
   await enqueueDraftJob(restaurant.id);
