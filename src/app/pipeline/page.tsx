@@ -7,6 +7,7 @@ import { setStage } from "../inbox/actions";
 import { AppShell } from "../inbox/shell";
 
 const COLUMNS: { stage: PipelineStage; title: string; hint: string }[] = [
+  { stage: "NONE", title: "Approved", hint: "Waiting for a contact email or Gmail before it can be sent" },
   { stage: "SCHEDULED", title: "Scheduled", hint: "Approved, first email waiting for its slot" },
   { stage: "CONTACTED", title: "Contacted", hint: "Emailed; follow-ups run until they reply" },
   { stage: "REPLIED", title: "Replied", hint: "Answer them in Gmail" },
@@ -28,17 +29,20 @@ const day = (d: Date | null) => (d ? d.toLocaleDateString("en-US", { month: "sho
 export default async function PipelinePage() {
   const restaurant = await requireRestaurant();
   if (!restaurant.setupCompletedAt) redirect("/setup/reports");
-  const [deals, pending] = await Promise.all([
+  const [deals, pending, gmail] = await Promise.all([
     db.draft.findMany({
-      where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: "APPROVED", stage: { not: "NONE" } },
+      where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: "APPROVED" },
       include: { contact: true, emails: { where: { status: { in: ["SCHEDULED", "SENT"] } }, orderBy: { scheduledFor: "asc" } } },
       orderBy: { stageUpdatedAt: "desc" },
     }),
     db.draft.count({ where: { restaurantId: restaurant.id, status: "PENDING" } }),
+    db.gmailAccount.findUnique({ where: { restaurantId: restaurant.id }, select: { id: true } }),
   ]);
   const closedOut = deals.filter((d) => d.stage === "UNSUBSCRIBED" || d.stage === "BOUNCED");
   const won = deals.filter((d) => d.stage === "WON").length;
-  const contacted = deals.filter((d) => d.stage !== "SCHEDULED").length;
+  const contacted = deals.filter((d) => d.stage !== "SCHEDULED" && d.stage !== "NONE").length;
+  // What an approved pitch that hasn't started sending still needs.
+  const blocker = (d: (typeof deals)[number]) => (!d.contact ? "Add a contact email" : !gmail ? "Connect Gmail to send" : "Press Start sending on the pitch");
 
   return (
     <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>
@@ -50,10 +54,10 @@ export default async function PipelinePage() {
       </div>
       {deals.length === 0 ? (
         <p className="text-ink-2">
-          Nothing here yet. Approve a pitch in the <Link href="/inbox?tab=catering">Approval Inbox</Link> and it appears here as it&apos;s sent.
+          Nothing here yet. Approve a pitch in the <Link href="/inbox?tab=catering">Approval Inbox</Link> and it appears here.
         </p>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
           {COLUMNS.map((col) => {
             const items = deals.filter((d) => d.stage === col.stage);
             return (
@@ -71,7 +75,13 @@ export default async function PipelinePage() {
                       </Link>
                       <span className="text-[13px] break-words text-muted">{d.contact?.email ?? "No contact"}</span>
                       <span className="text-[13px] text-ink-2">
-                        {next ? `Next email ${day(next.scheduledFor)}` : d.repliedAt ? `Replied ${day(d.repliedAt)}` : `Updated ${day(d.stageUpdatedAt)}`}
+                        {d.stage === "NONE"
+                          ? blocker(d)
+                          : next
+                            ? `Next email ${day(next.scheduledFor)}`
+                            : d.repliedAt
+                              ? `Replied ${day(d.repliedAt)}`
+                              : `Updated ${day(d.stageUpdatedAt)}`}
                       </span>
                       {MOVES[col.stage] && (
                         <div className="flex flex-wrap gap-1.5 pt-1">

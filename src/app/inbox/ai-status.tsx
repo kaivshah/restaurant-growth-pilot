@@ -37,8 +37,9 @@ export async function AiStatus({ job }: { job: DraftJob | null }) {
         </Notice>
       ) : (
         waiting && (
-          <Notice title={`The AI is busy (free limit reached). We'll try again at ${time(job!.runAfter!)}.`}>
-            Keep this page open and it carries on by itself, or click the button above to try now. Drafts already written are kept.
+          <Notice title={`The AI didn't answer, so we'll try again at ${time(job!.runAfter!)}.`}>
+            {job!.message ? `${job!.message.replace(/^AI busy: /, "").slice(0, 200)}. ` : ""}It carries on by itself, or click the button above to try now. Drafts already
+            written are kept.
           </Notice>
         )
       )}

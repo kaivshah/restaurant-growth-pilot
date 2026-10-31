@@ -431,3 +431,20 @@ export function jobState(job: { status: string; runAfter: Date | null } | null, 
   if (!job || (job.status !== "QUEUED" && job.status !== "RUNNING")) return "idle";
   return job.status === "QUEUED" && job.runAfter && job.runAfter > now ? "waiting" : "working";
 }
+
+/**
+ * Jobs waiting for a busy AI (say, Gemini's daily limit) are released when
+ * the AI setup changes, e.g. after switching to Ollama: the new AI may well
+ * be free now. Called when the web server and the worker start.
+ */
+export async function releaseJobsIfAiChanged(setup: string) {
+  const key = "ai-setup";
+  const previous = await db.cacheEntry.findUnique({ where: { key } });
+  const value = { setup } as Prisma.InputJsonValue;
+  const expiresAt = new Date("2999-01-01");
+  await db.cacheEntry.upsert({ where: { key }, create: { key, value, expiresAt }, update: { value, expiresAt } });
+  if (!previous || (previous.value as { setup?: string } | null)?.setup === setup) return 0;
+  const { count } = await db.draftJob.updateMany({ where: { status: "QUEUED", runAfter: { gt: new Date() } }, data: { runAfter: null, message: "Trying again with the new AI setup." } });
+  if (count) console.log(`[jobs] the AI setup changed; ${count} waiting ${count === 1 ? "job runs" : "jobs run"} now`);
+  return count;
+}
