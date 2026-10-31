@@ -148,6 +148,24 @@ describe("rewriteOfferCopy", () => {
     const out = await rewriteOfferCopy(fake(async () => good), packet, { headline: "Old", body: "Old [CODE]" }, "Shorter", noSleep);
     expect(out.ok && out.copy).toEqual(good);
   });
+  it("gives a rule-breaking rewrite one chance to be fixed", async () => {
+    const p = fake(async (n) => (n === 1 ? { headline: "x", body: "$9 deal [CODE]" } : good));
+    const out = await rewriteOfferCopy(p, packet, good, "Shorter", noSleep);
+    expect(out.ok).toBe(true);
+    expect(p.calls).toBe(2);
+  });
+  it("adds the franchise line to a pitch instead of throwing the rewrite away", async () => {
+    const pitch: FactsPacket = {
+      ...packet,
+      rules: { ...packet.rules, codePlaceholder: null },
+      pitch: { company: "Acme", contactFirstName: null, category: "office", distanceMiles: 1, offer: "free delivery", minOrder: 10, occasion: "Team lunches", event: null },
+    };
+    const p = fake(async () => ({ headline: "Subject: Lunch for Acme?", body: "Hi there, we'd love to cater your next team lunch." }));
+    const out = await rewriteOfferCopy(p, pitch, good, "Shorter", noSleep);
+    expect(out.ok && out.copy.headline).toBe("Lunch for Acme?");
+    expect(out.ok && out.copy.body).toMatch(/Subway #00000 is independently owned and operated\.$/);
+    expect(p.calls).toBe(1);
+  });
 });
 
 describe("choosing a provider", () => {

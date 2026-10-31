@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import { Notice } from "@/components/ui";
 import { type CopyState, rewriteDraft, saveDraftCopy } from "./actions";
 
@@ -41,6 +41,7 @@ export function CopyEditor({
     undefined,
   );
   const [instruction, setInstruction] = useState("");
+  const rewriteButton = useRef<HTMLButtonElement>(null);
   const latest = (rewritten?.at ?? 0) > (saved?.at ?? 0) ? rewritten : saved;
   // Key the fields on the latest server copy so a rewrite replaces what's shown.
   const shownHeadline = latest?.headline ?? headline;
@@ -113,11 +114,18 @@ export function CopyEditor({
                 name="instruction"
                 value={instruction}
                 onChange={(e) => setInstruction(e.target.value)}
+                // Enter means "rewrite", not the form's default "save".
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  if (instruction.trim() && rewriteButton.current && !rewriteButton.current.disabled) e.currentTarget.form?.requestSubmit(rewriteButton.current);
+                }}
                 placeholder="Or type what to change"
                 maxLength={300}
                 className="h-12 rounded-field border border-field bg-surface px-4"
               />
               <button
+                ref={rewriteButton}
                 type="submit"
                 formAction={rewrite}
                 disabled={busy || left <= 0}
@@ -128,6 +136,7 @@ export function CopyEditor({
             </div>
           </div>
 
+          {rewriting && <p className="text-[13px] text-muted">Rewriting… this takes a few seconds, or up to a minute with a local model.</p>}
           {(latest?.error || latest?.ok) && (
             <Notice tone={latest?.error ? "danger" : "green"}>{latest?.error ?? latest?.ok}</Notice>
           )}

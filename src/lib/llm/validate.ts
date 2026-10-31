@@ -7,6 +7,21 @@ export const INDEPENDENT_LINE = "independently owned and operated";
 export const bodyLimit = (isPitch: boolean) => (isPitch ? LIMITS.pitchBody : LIMITS.body);
 
 /**
+ * Tidies small, safe slips before the checks: a "Subject:" label on the
+ * headline, and a franchise pitch that left out the "independently owned and
+ * operated" line (added at the end, exactly as the rule asks). Anything else
+ * is left for the checks to catch.
+ */
+export function repairCopy(copy: OfferCopy, packet: FactsPacket): OfferCopy {
+  const headline = (copy.headline ?? "").trim().replace(/^(subject|headline)\s*:\s*/i, "");
+  let body = (copy.body ?? "").trim().replace(/^body\s*:\s*/i, "");
+  if (packet.pitch && packet.restaurant.kind === "FRANCHISE" && body && !body.toLowerCase().includes(INDEPENDENT_LINE)) {
+    body = `${body}\n\n${packet.restaurant.name} is ${INDEPENDENT_LINE}.`;
+  }
+  return { headline, body };
+}
+
+/**
  * Checks LLM output before it can reach the inbox. Returns a list of
  * problems; an empty list means the copy is safe to show the owner.
  */

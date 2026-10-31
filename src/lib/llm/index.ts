@@ -1,6 +1,6 @@
 import { Semaphore, type RetryOptions, withRetry } from "./retry";
 import { AiConfigError, type CopyProvider, type FactsPacket, type OfferCopy, ProviderError, type WriteResult } from "./types";
-import { validateCopy } from "./validate";
+import { repairCopy, validateCopy } from "./validate";
 
 export * from "./types";
 export { missingAiReason, providerFromEnv } from "./providers";
@@ -46,11 +46,11 @@ export async function writeOfferCopy(provider: CopyProvider, packet: FactsPacket
   const log = (outcome: CallLog["outcome"], error?: string): CallLog => ({ ...base, model: provider.model, outcome, attempts, inputTokens, outputTokens, durationMs: Date.now() - started, error });
 
   try {
-    let value = await call((signal) => provider.write(packet, signal));
+    let value = repairCopy(await call((signal) => provider.write(packet, signal)), packet);
     let problems = validateCopy(value, packet);
     if (problems.length > 0 && provider.rewrite) {
       const broken = value;
-      value = await call((signal) => provider.rewrite!(packet, broken, `Fix these problems and change nothing else: ${problems.join(" ")}`, signal));
+      value = repairCopy(await call((signal) => provider.rewrite!(packet, broken, `Fix these problems and change nothing else: ${problems.join(" ")}`, signal)), packet);
       problems = validateCopy(value, packet);
     }
     if (problems.length > 0) {
@@ -102,7 +102,8 @@ export async function writeManyCopy(provider: CopyProvider, items: { id: string;
       const log: CallLog = { ...base, model: provider.model, outcome: attempts > 1 ? "retried-ok" : "ok", attempts, inputTokens: value.inputTokens, outputTokens: value.outputTokens, durationMs: Date.now() - started };
       const redo: typeof items = [];
       chunk.forEach(({ id, packet }, n) => {
-        const copy = value.items.find((x) => x.id === id);
+        const found = value.items.find((x) => x.id === id);
+        const copy = found && repairCopy(found, packet);
         if (!copy || validateCopy(copy, packet).length) return void redo.push({ id, packet });
         // The batch's one log entry goes with its first pitch.
         out.set(id, { ok: true, copy: { headline: copy.headline.trim(), body: copy.body.trim() }, writtenBy: `${provider.name}:${provider.model}`, log: n === 0 ? log : null });
@@ -136,12 +137,28 @@ export async function rewriteOfferCopy(
   }
   const started = Date.now();
   const base = { provider: provider.name, model: provider.model, purpose: "rewrite" as const };
+  // The owner is waiting on the page: one retry, not three.
+  const opts = { retries: 1, ...retry };
   try {
-    const { value, attempts } = await limiter.run(() =>
-      withRetry((signal) => provider.rewrite!(packet, current, instruction, signal), retry),
-    );
-    const log = { ...base, model: provider.model, attempts, durationMs: Date.now() - started, inputTokens: value.inputTokens, outputTokens: value.outputTokens };
-    const problems = validateCopy(value, packet);
+    const first = await limiter.run(() => withRetry((signal) => provider.rewrite!(packet, current, instruction, signal), opts));
+    let attempts = first.attempts;
+    let inputTokens = first.value.inputTokens ?? 0;
+    let outputTokens = first.value.outputTokens ?? 0;
+    let value = repairCopy(first.value, packet);
+    let problems = validateCopy(value, packet);
+    // Like a first draft, a rewrite that breaks a rule gets one chance to be fixed.
+    if (problems.length > 0) {
+      const broken = value;
+      const fixed = await limiter.run(() =>
+        withRetry((signal) => provider.rewrite!(packet, broken, `Keep the change the owner asked for ("${instruction.slice(0, 200)}") and fix these problems, changing nothing else: ${problems.join(" ")}`, signal), opts),
+      );
+      attempts += fixed.attempts;
+      inputTokens += fixed.value.inputTokens ?? 0;
+      outputTokens += fixed.value.outputTokens ?? 0;
+      value = repairCopy(fixed.value, packet);
+      problems = validateCopy(value, packet);
+    }
+    const log = { ...base, model: provider.model, attempts, durationMs: Date.now() - started, inputTokens, outputTokens };
     if (problems.length > 0) {
       return { ok: false, message: `The rewrite broke a rule, so we kept your draft. ${problems[0]}`, log: { ...log, outcome: "invalid-output", error: problems.join(" ") } };
     }
@@ -156,7 +173,7 @@ export async function rewriteOfferCopy(
     return {
       ok: false,
       message: `${message} Your draft is unchanged; try again in a minute.`,
-      log: { ...base, outcome: "error", attempts: (retry?.retries ?? 3) + 1, durationMs: Date.now() - started, error: message },
+      log: { ...base, outcome: "error", attempts: opts.retries + 1, durationMs: Date.now() - started, error: message },
     };
   }
 }

@@ -36,7 +36,7 @@ export function rewriteRequest(packet: FactsPacket, current: OfferCopy, instruct
     `Body: ${current.body}`,
     "",
     `The owner asked: "${instruction.slice(0, 300)}"`,
-    "Rewrite the draft to follow that request, keeping every rule above.",
+    "Rewrite the draft to follow that request, keeping every rule above. Return the whole email (headline and body, including the greeting and sign-off), not just the part you changed.",
   ].join("\n");
 }
 

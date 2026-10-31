@@ -255,7 +255,8 @@ export function ollamaProvider(baseUrl: string, model: string): CopyProvider {
   async function call(user: string, signal: AbortSignal): Promise<WriteResult> {
     const { json, ...tokens } = await chat(user, copyJsonSchema, signal);
     const parsed = CopySchema.safeParse(json);
-    if (!parsed.success) throw new ProviderError("The local model returned copy we couldn't read", false);
+    // Small models sometimes return broken JSON; a second try usually works.
+    if (!parsed.success) throw new ProviderError("The local model returned copy we couldn't read", true);
     return { ...parsed.data, ...tokens };
   }
 
