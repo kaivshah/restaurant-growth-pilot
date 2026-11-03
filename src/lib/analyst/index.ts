@@ -3,6 +3,7 @@ import type { AnalystContext } from "./context";
 import { LATEST_FLASH } from "@/lib/llm/gemini";
 import { fakeAnalyst } from "./fake";
 import { fakeLeadAnalyst } from "./leads/fake";
+import { CLAUDE_DEFAULT_MODEL } from "@/lib/llm/claude";
 import { type AnalystModel, claudeAnalyst, geminiAnalyst, ollamaAnalyst } from "./models";
 import type { AnalysisOutcome } from "./run";
 import { similar } from "./verify";
@@ -17,12 +18,12 @@ export { proposalToOffer, citations } from "./to-offer";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /**
- * The analyst chosen by ANALYST_PROVIDER (gemini by default), or null when
+ * The analyst chosen by ANALYST_PROVIDER (Claude by default), or null when
  * it's off or its key is missing (rule ideas only). The purpose only matters
  * for the scripted fake.
  */
 export function analystFromEnv(purpose: "offers" | "leads" = "offers", env: NodeJS.ProcessEnv = process.env): AnalystModel | null {
-  const choice = (env.ANALYST_PROVIDER || "gemini").toLowerCase();
+  const choice = (env.ANALYST_PROVIDER || "anthropic").toLowerCase();
   if (choice === "gemini") {
     if (!env.GEMINI_API_KEY) return null;
     // An ANALYST_MODEL left over for another provider (e.g. claude-…) is ignored.
@@ -35,7 +36,7 @@ export function analystFromEnv(purpose: "offers" | "leads" = "offers", env: Node
       return null;
     }
     const effort = EFFORTS.find((e) => e === env.ANALYST_EFFORT);
-    return claudeAnalyst(env.ANTHROPIC_API_KEY, env.ANALYST_MODEL?.startsWith("claude") ? env.ANALYST_MODEL : "claude-opus-5-5", effort);
+    return claudeAnalyst(env.ANTHROPIC_API_KEY, env.ANALYST_MODEL?.startsWith("claude") ? env.ANALYST_MODEL : env.ANTHROPIC_MODEL || CLAUDE_DEFAULT_MODEL, effort);
   }
   if (choice === "ollama") {
     return ollamaAnalyst(env.OLLAMA_URL || "http://localhost:11434", env.ANALYST_MODEL || env.OLLAMA_MODEL || "qwen2.5:7b-instruct");

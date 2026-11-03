@@ -265,6 +265,7 @@ export async function runLeadAnalysis(model: AnalystModel, ctx: LeadContext, lim
     tools: [],
     prefetchTools: LEAD_TOOLS,
     prefetch: [{ name: "get_rules" }, { name: "list_leads" }, { name: "get_local_events" }],
+    oneShot: true,
     submit: { name: "submit_pitches", description: "Submit the recommended businesses and events, with an offer each, and the ones you skipped.", jsonSchema: SUBMIT_JSON, schema: LeadSubmission },
     // One request, plus one more only if the answer needs fixing.
     limits: { maxTurns: 2, ...limits },

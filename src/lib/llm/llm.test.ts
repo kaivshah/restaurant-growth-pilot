@@ -169,11 +169,14 @@ describe("rewriteOfferCopy", () => {
 });
 
 describe("choosing a provider", () => {
-  it("defaults to Gemini and needs its key", () => {
-    expect(providerFromEnv({ GEMINI_API_KEY: "k" } as unknown as NodeJS.ProcessEnv)?.name).toBe("gemini");
+  it("defaults to Claude and needs its key", () => {
+    const claude = providerFromEnv({ ANTHROPIC_API_KEY: "k" } as unknown as NodeJS.ProcessEnv);
+    expect(claude?.name).toBe("anthropic");
+    expect(claude?.model).toBe("claude-opus-5-5");
+    expect(providerFromEnv({ ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-haiku-5-5" } as unknown as NodeJS.ProcessEnv)?.model).toBe("claude-haiku-5-5");
     expect(providerFromEnv({} as unknown as NodeJS.ProcessEnv)).toBeNull();
     expect(providerFromEnv({ LLM_PROVIDER: "template" } as unknown as NodeJS.ProcessEnv)).toBeNull();
-    expect(providerFromEnv({ LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k" } as unknown as NodeJS.ProcessEnv)?.name).toBe("anthropic");
+    expect(providerFromEnv({ LLM_PROVIDER: "gemini", GEMINI_API_KEY: "k" } as unknown as NodeJS.ProcessEnv)?.name).toBe("gemini");
   });
 });
 
@@ -259,6 +262,91 @@ describe("Ollama", () => {
       expect(res.inputTokens).toBe(900);
     } finally {
       globalThis.fetch = original;
+    }
+  });
+});
+
+describe("Claude requests", () => {
+  it("cache the instructions and pitch rules, send only the facts as the message, and use fallbacks", async () => {
+    const { anthropicProvider } = await import("./providers");
+    const bodies: Record<string, unknown>[] = [];
+    // A stand-in for the Claude API on a local port: records each request, answers like Claude would.
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        bodies.push(JSON.parse(raw));
+        const text = JSON.stringify({ items: [{ id: "a", headline: "Lunch for Acme?", body: "Hi there, we cater team lunches. Subway #00000 is independently owned and operated." }] });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "msg_1", type: "message", role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text }], stop_reason: "end_turn", usage: { input_tokens: 40, cache_read_input_tokens: 900, output_tokens: 120 } }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const before = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`;
+    try {
+      const p = anthropicProvider(`test-key-${port}`, "claude-opus-5-5");
+      const packet: FactsPacket = {
+        ...pitchPacketBase,
+        pitch: { company: "Acme", contactFirstName: null, category: "office", distanceMiles: 1, offer: "free delivery", minOrder: 10, occasion: "Team lunches", event: null },
+      };
+      const res = await p.writeMany!([{ id: "a", packet }], new AbortController().signal);
+      const body = bodies[0] as { system: { text: string; cache_control?: { ttl?: string } }[]; messages: { content: string }[]; output_config: { effort: string }; fallbacks?: string };
+      expect(body.system.at(-1)?.cache_control?.ttl).toBe("1h");
+      expect(body.system.map((b) => b.text).join("\n")).toMatch(/independently owned and operated/); // the rules, cached
+      expect(body.messages[0].content).not.toMatch(/End every body/); // ...not repeated in the message
+      expect(body.messages[0].content).toMatch(/### a/);
+      expect(body.output_config.effort).toBe("low");
+      expect(body.fallbacks).toBe("default");
+      expect(res.inputTokens).toBe(940); // cached tokens are counted in the usage log
+    } finally {
+      server.close();
+      if (before === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = before;
+    }
+  });
+});
+
+const pitchPacketBase: FactsPacket = {
+  restaurant: { name: "Subway #00000", brand: "Subway", kind: "FRANCHISE" },
+  offer: { key: "pitch:free_delivery", title: "free delivery", schedule: "Send this week", audience: "Acme", copyLabel: "Email subject" },
+  facts: ["Free delivery with a first catering order"],
+  rules: { brandSafe: true, maxDiscountPct: 15, codePlaceholder: null },
+};
+
+describe("Claude analyst requests", () => {
+  it("cache the shared instructions for an hour, and skip the one-off data cache for one-request runs", async () => {
+    const { claudeAnalyst } = await import("@/lib/analyst/models");
+    const bodies: Record<string, unknown>[] = [];
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        bodies.push(JSON.parse(raw));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "msg_2", type: "message", role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "t1", name: "submit", input: {} }], stop_reason: "tool_use", usage: { input_tokens: 10, output_tokens: 5 } }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const before = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`;
+    try {
+      const model = claudeAnalyst(`test-key-analyst-${port}`, "claude-opus-5-5");
+      const tools = [{ name: "submit", description: "Submit", inputSchema: { type: "object", properties: {} } }];
+      await model.start({ system: "You rank leads.", user: "data…", tools, oneShot: true }).send(null, new AbortController().signal);
+      await model.start({ system: "You rank leads.", user: "data…", tools }).send(null, new AbortController().signal);
+      const [oneShot, loop] = bodies as { system: { cache_control?: { ttl?: string } }[]; cache_control?: unknown }[];
+      expect(oneShot.system.at(-1)?.cache_control?.ttl).toBe("1h");
+      expect(oneShot.cache_control).toBeUndefined();
+      expect(loop.cache_control).toEqual({ type: "ephemeral" });
+    } finally {
+      server.close();
+      if (before === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = before;
     }
   });
 });

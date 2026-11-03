@@ -9,7 +9,7 @@ async function main() {
   const { providerFromEnv, missingAiReason, writeOfferCopy } = await import("@/lib/llm");
   const { analystFromEnv } = await import("@/lib/analyst");
 
-  console.log(`Copywriter: LLM_PROVIDER=${process.env.LLM_PROVIDER || "gemini"}  Analyst: ANALYST_PROVIDER=${process.env.ANALYST_PROVIDER || "gemini"}  Model: ${process.env.GEMINI_MODEL || "gemini-flash-latest"}`);
+  console.log((await import("@/lib/llm/describe")).aiSummary());
   const provider = providerFromEnv();
   if (!provider) {
     console.log(`✗ No copywriter. ${missingAiReason()}`);

@@ -29,10 +29,18 @@ async function main() {
   const { aiSummary } = await import("@/lib/llm/describe");
   console.log(`[worker] ${aiSummary()}`);
   await (await import("@/lib/drafts")).releaseJobsIfAiChanged(aiSummary()).catch(() => 0);
+  const { housekeeping } = await import("@/lib/maintenance");
+  let lastCleanup = 0;
   while (!stopping) {
     try {
       await requeueStaleJobs();
       await processDraftJobs();
+      // Once an hour: drop expired cache entries, old finished jobs and old AI logs.
+      if (Date.now() - lastCleanup > 3_600_000) {
+        lastCleanup = Date.now();
+        const removed = await housekeeping();
+        if (Object.values(removed).some(Boolean)) console.log(`[worker] cleaned up ${JSON.stringify(removed)}`);
+      }
     } catch (err) {
       console.error("[worker] error:", err instanceof Error ? err.message : err);
     }

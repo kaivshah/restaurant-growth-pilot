@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { AiConfigError, ProviderError } from "@/lib/llm";
 import { type GeminiContent, geminiGenerate, replyText, resolvedModel, usage } from "@/lib/llm/gemini";
 import { ollamaOptions } from "@/lib/llm/providers";
+import { cachedSystem, claudeClient, claudeError, fallbackParams } from "@/lib/llm/claude";
 import { parseRetryAfter } from "@/lib/llm/retry";
 import type { ToolSpec } from "./tools";
 
@@ -38,34 +39,20 @@ export interface AnalystSession {
 export interface AnalystModel {
   provider: string;
   model: string;
-  start(opts: { system: string; user: string; tools: ToolSpec[] }): AnalystSession;
+  /** oneShot: the run is expected to finish in one request, so its one-off data isn't worth caching. */
+  start(opts: { system: string; user: string; tools: ToolSpec[]; oneShot?: boolean }): AnalystSession;
 }
 
 // ---------- Claude ----------
 
 /** Models that support server-side refusal fallbacks with "default" routing. */
-const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
-
-function toProviderError(err: unknown): ProviderError {
-  if (err instanceof ProviderError) return err;
-  if (err instanceof Anthropic.RateLimitError) {
-    return new ProviderError("Claude rate limit reached", true, parseRetryAfter(err.headers?.get("retry-after")));
-  }
-  if (err instanceof Anthropic.InternalServerError || err instanceof Anthropic.APIConnectionError) {
-    return new ProviderError(`Claude unavailable: ${err.message}`, true);
-  }
-  if (err instanceof Anthropic.AuthenticationError) return new ProviderError("Claude API key is missing or invalid", false);
-  if (err instanceof Anthropic.APIError) return new ProviderError(`Claude error ${err.status}: ${err.message}`, false);
-  return new ProviderError(err instanceof Error ? err.message : String(err), false);
-}
-
 export function claudeAnalyst(apiKey: string, model: string, effort?: "low" | "medium" | "high" | "xhigh" | "max"): AnalystModel {
-  // Retries are handled by the run loop so every provider behaves the same.
-  const client = new Anthropic({ apiKey, maxRetries: 0 });
+  // One shared client (warm connections); retries are handled by the run loop so every provider behaves the same.
+  const client = claudeClient(apiKey);
   return {
     provider: "anthropic",
     model,
-    start({ system, user, tools }) {
+    start({ system, user, tools, oneShot }) {
       const messages: Anthropic.Beta.BetaMessageParam[] = [];
       const toolDefs: Anthropic.Beta.BetaTool[] = tools.map((t) => ({
         name: t.name,
@@ -84,19 +71,21 @@ export function claudeAnalyst(apiKey: string, model: string, effort?: "low" | "m
             });
           }
           try {
-            const useFallbacks = FALLBACK_MODELS.has(model);
             const response = await client.beta.messages.create(
               {
                 model,
                 max_tokens: 16000,
-                system,
+                // The tools and instructions are the same for every restaurant and every day: cached for an hour,
+                // so other runs in that hour read them instead of paying again.
+                system: cachedSystem(system),
                 tools: toolDefs,
                 messages,
-                // Each turn resends the whole conversation; caching the prefix makes every turn after the first
-                // read the tools, instructions and earlier tool results from cache (about a tenth of the price).
-                cache_control: { type: "ephemeral" },
+                // Each turn resends the conversation; the automatic breakpoint caches it (5 minutes), so later
+                // turns read earlier data and tool results from cache. A one-request run skips it: the write
+                // premium would buy nothing (a retry turn still gets it).
+                ...(oneShot && messages.length === 1 ? {} : { cache_control: { type: "ephemeral" as const } }),
                 ...(effort ? { output_config: { effort } } : {}),
-                ...(useFallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+                ...fallbackParams(model),
               },
               { signal },
             );
@@ -112,7 +101,7 @@ export function claudeAnalyst(apiKey: string, model: string, effort?: "low" | "m
           } catch (err) {
             // Drop the user turn we just added so a retry resends it cleanly.
             messages.pop();
-            throw toProviderError(err);
+            throw claudeError(err);
           }
         },
       };

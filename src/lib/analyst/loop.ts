@@ -44,6 +44,8 @@ export interface LoopConfig<C, S> {
    * in one request instead of spending a request on each lookup.
    */
   prefetch?: { name: string; input?: unknown }[];
+  /** The run should finish in one request (no tools to call), so the conversation isn't cached */
+  oneShot?: boolean;
   /** Tools that may be prefetched but aren't offered to the model */
   prefetchTools?: ToolDef<unknown, C>[];
   limits?: RunLimits;
@@ -84,6 +86,7 @@ export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, 
   const session = model.start({
     system: cfg.system,
     user,
+    oneShot: cfg.oneShot,
     tools: [
       ...cfg.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
       { name: cfg.submit.name, description: cfg.submit.description, inputSchema: cfg.submit.jsonSchema },

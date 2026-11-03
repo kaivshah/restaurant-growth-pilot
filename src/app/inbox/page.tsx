@@ -5,6 +5,7 @@ import { ButtonLink, Card, Notice } from "@/components/ui";
 import { ensureTodaysPlan } from "@/lib/daily";
 import { emailSendingOn } from "@/lib/features";
 import { db } from "@/lib/db";
+import { latestSuggestions } from "@/lib/leads";
 import { REWRITE_LIMIT, jobState, kickJobs, requeueStaleJobs } from "@/lib/drafts";
 import { requireRestaurant } from "@/lib/restaurant";
 import { approveDraft, refreshIdeas, setSkipReason, skipDraft, undoDraft } from "./actions";
@@ -55,6 +56,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     db.analysisRun.findFirst({ where: { restaurantId: restaurant.id, purpose: "offers", status: { not: "RUNNING" } }, orderBy: { createdAt: "desc" } }),
     db.draft.count({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", stage: "REPLIED", replyHandled: false } }),
   ]);
+  const picks = (await latestSuggestions(restaurant.id)).list.length;
   const findings = (lastRun?.status === "DONE" ? (lastRun.findings as unknown as Finding[]) : null) ?? [];
   const pendingOffers = drafts.filter((x) => x.status === "PENDING").length;
   const pending = pendingOffers + pendingPitches + newReplies;
@@ -63,7 +65,10 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   const selected = drafts.find((x) => x.id === d) ?? drafts.find((x) => x.status === "PENDING") ?? drafts[0];
 
   const cards = [
-    { href: "/inbox?tab=catering", tab: "catering", n: pendingPitches, title: "Catering pitches", sub: `Offices, schools and events within ${restaurant.radiusMiles} mi` },
+    // No pitches yet but today's picks are ready: point straight at them.
+    pendingPitches === 0 && picks > 0
+      ? { href: "/leads", tab: "catering", n: pendingPitches, title: "Catering pitches", sub: `${picks} highly recommended businesses and events are ready: pick one to pitch` }
+      : { href: "/inbox?tab=catering", tab: "catering", n: pendingPitches, title: "Catering pitches", sub: `Offices, schools and events within ${restaurant.radiusMiles} mi` },
     { href: "/inbox?tab=offers", tab: "offers", n: pendingOffers, title: "Customer offers", sub: "Ideas from your weekly reports" },
     { href: "/inbox?tab=replies", tab: "replies", n: newReplies, title: "Replies waiting", sub: "Businesses that answered your pitches" },
   ].filter((c) => c.tab !== "replies" || emailSendingOn());

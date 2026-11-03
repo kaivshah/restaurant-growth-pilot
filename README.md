@@ -29,13 +29,23 @@ Name not decided yet, so the app calls itself **product**.
    - Approve the draft, then **Copy email** and send it from your own mail.
 
 
-### AI: free Gemini by default, Claude later
+### AI: Claude
 
-Everything is written and decided by a real AI model; there are no pre-written drafts. One free **Gemini** key runs both the copywriter and the AI analyst:
+Everything is written and decided by Claude; there are no pre-written drafts.
 
-1. Go to [Google AI Studio](https://aistudio.google.com), click **Get API key → Create API key** (no card needed).
-2. Put it in `.env` as `GEMINI_API_KEY`. `LLM_PROVIDER` and `ANALYST_PROVIDER` already default to `gemini`; `GEMINI_MODEL` defaults to `gemini-flash-latest` (Google's current Flash). Google retires model names for new keys from time to time; when that happens the app switches to the model Google suggests and logs a warning.
-3. Restart `npm run dev`.
+1. Create an API key at [platform.claude.com](https://platform.claude.com) and put it in `.env` as `ANTHROPIC_API_KEY`.
+2. `LLM_PROVIDER` and `ANALYST_PROVIDER` default to `anthropic`.
+3. `ANTHROPIC_MODEL` defaults to `claude-opus-5-5`. `claude-sonnet-5-5` and `claude-haiku-5-5` are cheaper options.
+4. Restart `npm run dev` and `npm run worker`. Both print which AI they use on their first line, and `npm run ai:check` sends one test request of each kind.
+
+**Keeping the cost down:**
+- **AI only on request.** Scans use no AI. The daily plan makes about two requests (deals and catering picks, side by side) and reuses its answers until the data changes. One request writes up to 8 pitches.
+- **Small, stable requests.** Instructions go first in a system block cached for an hour, so the second and later requests in that hour read them at a fraction of the price (Opus 5.5 cache reads cost $0.20 per million tokens instead of $4). The owner's data is sent compactly after it.
+- **Low effort for emails.** The analysis uses the model's default (`ANALYST_EFFORT` changes it).
+- **No paying twice.** Results are cached in Postgres (daily context, analyses, Google and event results), so restarts and other servers reuse them instead of starting cold.
+- **Server-side fallbacks** are on: if Claude declines a request, another Claude model answers it within the same call. Rate limits, overloads and timeouts make the job retry later; a bad key or model name stops it with a clear message.
+
+Gemini (`LLM_PROVIDER="gemini"`, free tier) and Ollama (below) still work.
 
 Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 
@@ -44,23 +54,21 @@ Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 | Action | AI requests |
 |---|---|
 | Scan my area | None. Google Places and the event APIs only. |
-| Search the web for events (Events tab) | 1 (Gemini with Google Search), cached for a day |
-| AI suggests | 1: a short list of the scanned businesses and events goes with the request; the AI returns the 20 best (`AI_SUGGESTIONS`) with a reason each. No pitches are written. Unchanged data reuses the last answer. |
+| Search the web for events (Events tab, only with a `GEMINI_API_KEY`) | 1 (Gemini with Google Search), cached for a day |
+| Daily plan: catering picks | 1: a short list of the scanned businesses and events goes with the request; the AI returns the 20 best (`AI_SUGGESTIONS`) with a reason each. No pitches are written. Unchanged data reuses the last answer. |
 | Generate pitch | 1 per 8 pitches |
 | Approving a pitch | 1 per 8 pitches, for the two follow-ups |
-| Offer ideas (after reports are confirmed, or Refresh ideas) | Usually 1–2 for the analysis, plus 1 per offer email |
+| Daily plan: deals (after reports are confirmed, or Refresh ideas) | Usually 1–2 for the analysis, plus 1 per new offer email |
 
-AI jobs run one at a time, pitches first, so they don't compete for the free per-minute limit (`GEMINI_RPM`, default 10). When Gemini Flash is overloaded ("high demand", 503), requests switch to Gemini Flash-Lite for 5 minutes (`GEMINI_FALLBACK_MODEL`). The server terminal shows each request (`[gemini] … answered in 4.2s`).
+AI jobs run one at a time per restaurant, pitches first; the daily plan runs its two requests side by side.
 
-**Free limits:** Gemini's free tier allows a limited number of requests per minute and per day (see your quota in AI Studio). A full refresh uses roughly 10–25 requests. When a limit is hit, the job waits and tries again after 2, 5, 10, 20, 30 and 60 minutes (or longer if Google asks), and the inbox shows "The AI is busy… we'll try again at 3:40 pm". Drafts already written are kept, and **Refresh ideas** / **Scan my area** tries again straight away. Retries happen while the app is open in a browser.
-
-**Privacy:** on the free tier, Google may use what's sent to improve its models: the store's sales totals and offer facts, and in pitches the business name and the contact's first name. No customer data is sent. For production, use Claude or a paid Gemini project.
+**Privacy:** the AI gets the store's totals and offer facts, and in pitches the business name and the contact's first name. No customer data, names of staff or pay is ever sent.
 
 **Checking the AI setup:** `npm run ai:check` sends one email-draft request and one tool call (like the analyst makes) using your `.env`, and prints which model answered and how long it took. The server terminal also prints every Gemini request: `[gemini] … answered in 4.2s`, waits for the free limit, and errors.
 
 **Running a local model with Ollama (free, no limits):** install [Ollama](https://ollama.com), run `ollama pull qwen2.5:7b-instruct`, then in `.env` set `LLM_PROVIDER="ollama"`, `ANALYST_PROVIDER="ollama"`, `AI_TIMEOUT_SECONDS="300"` and `WEB_EVENTS="off"` (the web event search needs Gemini). Nothing leaves your computer. It writes 3 pitches per request and is slower than Gemini (about 20–60 s per request on a MacBook); on an 8 GB Mac use `qwen2.5:3b` instead.
 
-**Switching to Claude:** set `LLM_PROVIDER="anthropic"`, `ANALYST_PROVIDER="anthropic"` and `ANTHROPIC_API_KEY`, then restart.
+**Operations:** `GET /api/health` returns 200 when the database is reachable (503 when not) and how long the oldest job has waited, for a load balancer or uptime check. The worker cleans up hourly: it drops expired cache entries, finished jobs older than 30 days, and AI logs and unused analyses older than 90 days.
 
 ### Milestone 4: your own customer list, personal codes and results
 

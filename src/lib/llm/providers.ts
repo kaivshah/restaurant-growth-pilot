@@ -1,7 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod/v4";
-import { SYSTEM_PROMPT, batchPitchRequest, followUpRequest, rewriteRequest, writeRequest } from "./prompt";
+import { claudeClient, claudeError, cachedSystem, fallbackParams, inputTokensOf, CLAUDE_DEFAULT_MODEL } from "./claude";
+import { SYSTEM_PROMPT, batchPitchRequest, followUpRequest, pitchItemsRequest, pitchRules, rewriteRequest, writeRequest } from "./prompt";
 import { parseRetryAfter } from "./retry";
 import { AiConfigError, type CopyProvider, ProviderError, type WriteResult } from "./types";
 import { LATEST_FLASH, geminiGenerate, replyText, resolvedModel, usage } from "./gemini";
@@ -122,93 +122,59 @@ export function geminiProvider(apiKey: string, model: string): CopyProvider {
 
 // ---------- Claude (Anthropic) ----------
 
-function anthropicError(err: unknown): ProviderError | AiConfigError {
-  if (err instanceof Anthropic.RateLimitError) {
-    return new ProviderError("Claude rate limit reached", true, parseRetryAfter(err.headers?.get("retry-after")));
-  }
-  if (err instanceof Anthropic.InternalServerError || err instanceof Anthropic.APIConnectionError) {
-    return new ProviderError(`Claude unavailable: ${err.message}`, true);
-  }
-  if (err instanceof Anthropic.AuthenticationError) return new AiConfigError("Claude API key is missing or invalid. Check ANTHROPIC_API_KEY in .env.");
-  if (err instanceof Anthropic.NotFoundError) return new AiConfigError(`Claude model not found: ${err.message}`);
-  if (err instanceof Anthropic.APIError) return new ProviderError(`Claude error ${err.status}: ${err.message}`, false);
-  if (err instanceof ProviderError || err instanceof AiConfigError) return err;
-  return new ProviderError(err instanceof Error ? err.message : String(err), false);
-}
-
+/**
+ * The copywriter on Claude. The instructions (and, for pitches, the
+ * restaurant's rules) go in a cached system block; only each request's facts
+ * change. Low effort: short emails don't need deep thinking.
+ */
 export function anthropicProvider(apiKey: string, model: string): CopyProvider {
-  // Retries are handled by withRetry so every provider behaves the same.
-  const client = new Anthropic({ apiKey, maxRetries: 0 });
+  const client = claudeClient(apiKey);
 
-  async function call(user: string, signal: AbortSignal): Promise<WriteResult> {
+  async function parse<T>(system: string[], user: string, format: ReturnType<typeof betaZodOutputFormat<z.ZodType<T>>>, maxTokens: number, signal: AbortSignal, what: string) {
     try {
-      const response = await client.messages.parse(
+      const response = await client.beta.messages.parse(
         {
           model,
-          max_tokens: 2000,
-          system: SYSTEM_PROMPT,
+          max_tokens: maxTokens,
+          system: cachedSystem(...system),
           messages: [{ role: "user", content: user }],
-          output_config: { format: zodOutputFormat(CopySchema), effort: "low" },
+          output_config: { format, effort: "low" },
+          ...fallbackParams(model),
         },
         { signal },
       );
-      if (response.stop_reason === "refusal") throw new ProviderError("Claude declined to write this offer", false);
-      if (!response.parsed_output) throw new ProviderError("Claude returned copy we couldn't read", false);
-      return {
-        ...response.parsed_output,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-      };
+      if (response.stop_reason === "refusal") throw new ProviderError(`Claude declined to write ${what}`, false);
+      // Cut off or unreadable: a second try usually works.
+      if (!response.parsed_output) throw new ProviderError(`Claude returned ${what} we couldn't read`, true);
+      return { value: response.parsed_output as T, inputTokens: inputTokensOf(response.usage), outputTokens: response.usage.output_tokens };
     } catch (err) {
-      throw anthropicError(err);
+      throw claudeError(err);
     }
   }
+
+  const single = async (user: string, signal: AbortSignal): Promise<WriteResult> => {
+    const r = await parse(SYSTEM_PROMPT_PARTS, user, betaZodOutputFormat(CopySchema), 4000, signal, "this copy");
+    return { ...r.value, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+  };
 
   return {
     name: "anthropic",
     model,
-    write: (packet, signal) => call(writeRequest(packet), signal),
-    rewrite: (packet, current, instruction, signal) => call(rewriteRequest(packet, current, instruction), signal),
+    write: (packet, signal) => single(writeRequest(packet), signal),
+    rewrite: (packet, current, instruction, signal) => single(rewriteRequest(packet, current, instruction), signal),
     async writeMany(items, signal) {
-      try {
-        const response = await client.messages.parse(
-          {
-            model,
-            max_tokens: 4000 + items.length * 600,
-            system: SYSTEM_PROMPT,
-            messages: [{ role: "user", content: batchPitchRequest(items) }],
-            output_config: { format: zodOutputFormat(BatchSchema), effort: "low" },
-          },
-          { signal },
-        );
-        if (response.stop_reason === "refusal") throw new ProviderError("Claude declined to write these pitches", false);
-        if (!response.parsed_output) throw new ProviderError("Claude returned pitches we couldn't read", true);
-        return { items: response.parsed_output.items, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
-      } catch (err) {
-        throw anthropicError(err);
-      }
+      // The restaurant's pitch rules are the same for every batch it sends, so they're cached with the instructions.
+      const r = await parse([...SYSTEM_PROMPT_PARTS, pitchRules(items[0].packet)], pitchItemsRequest(items), betaZodOutputFormat(BatchSchema), 4000 + items.length * 800, signal, "these pitches");
+      return { items: r.value.items, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
     },
     async writeFollowUps(items, signal) {
-      try {
-        const response = await client.messages.parse(
-          {
-            model,
-            max_tokens: 2000 + items.length * 500,
-            system: SYSTEM_PROMPT,
-            messages: [{ role: "user", content: followUpRequest(items) }],
-            output_config: { format: zodOutputFormat(FollowUpSchema), effort: "low" },
-          },
-          { signal },
-        );
-        if (response.stop_reason === "refusal") throw new ProviderError("Claude declined to write these follow-ups", false);
-        if (!response.parsed_output) throw new ProviderError("Claude returned follow-ups we couldn't read", true);
-        return { items: response.parsed_output.items, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
-      } catch (err) {
-        throw anthropicError(err);
-      }
+      const r = await parse(SYSTEM_PROMPT_PARTS, followUpRequest(items), betaZodOutputFormat(FollowUpSchema), 3000 + items.length * 600, signal, "these follow-ups");
+      return { items: r.value.items, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
     },
   };
 }
+
+const SYSTEM_PROMPT_PARTS = [SYSTEM_PROMPT];
 
 // ---------- Ollama (free, runs open models such as Qwen or Llama locally) ----------
 
@@ -293,14 +259,14 @@ function safeJson(text: string | undefined): unknown {
 // ---------- Choosing a provider from the environment ----------
 
 /**
- * The copywriter chosen by LLM_PROVIDER (gemini by default), or null when its
+ * The copywriter chosen by LLM_PROVIDER (Claude by default), or null when its
  * key is missing. Without a provider no drafts are written.
  */
 export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): CopyProvider | null {
-  const choice = (env.LLM_PROVIDER || "gemini").toLowerCase();
+  const choice = (env.LLM_PROVIDER || "anthropic").toLowerCase();
   if (choice === "anthropic") {
     if (!env.ANTHROPIC_API_KEY) return null;
-    return anthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODEL || "claude-haiku-5-5");
+    return anthropicProvider(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODEL || CLAUDE_DEFAULT_MODEL);
   }
   if (choice === "ollama") {
     return ollamaProvider(env.OLLAMA_URL || "http://localhost:11434", env.OLLAMA_MODEL || "qwen2.5:7b-instruct");
@@ -314,8 +280,8 @@ export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): CopyProvi
 
 /** Why there's no copywriter, for the setup notice. */
 export function missingAiReason(env: NodeJS.ProcessEnv = process.env): string {
-  const choice = (env.LLM_PROVIDER || "gemini").toLowerCase();
-  if (choice === "anthropic") return "LLM_PROVIDER is anthropic but ANTHROPIC_API_KEY is empty.";
+  const choice = (env.LLM_PROVIDER || "anthropic").toLowerCase();
+  if (choice === "anthropic") return "Add your Claude API key as ANTHROPIC_API_KEY in .env (from platform.claude.com), then restart the app.";
   if (choice === "gemini") return "Add a free Gemini key as GEMINI_API_KEY in .env (from aistudio.google.com), then restart the app.";
   return `LLM_PROVIDER="${choice}" isn't supported. Use gemini, anthropic or ollama.`;
 }

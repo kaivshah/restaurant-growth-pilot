@@ -76,9 +76,12 @@ function pitchRequest(packet: FactsPacket): string {
 
 /** Many pitches in one request: the shared rules once, then each pitch's facts with its id. */
 export function batchPitchRequest(packets: { id: string; packet: FactsPacket }[]): string {
+  return [pitchRules(packets[0].packet), "", pitchItemsRequest(packets)].join("\n");
+}
+
+/** The part of a batch that changes every time: the ask and each pitch's facts (the rules go first, where they can be cached). */
+export function pitchItemsRequest(packets: { id: string; packet: FactsPacket }[]): string {
   return [
-    pitchRules(packets[0].packet),
-    "",
     `Write ${packets.length} separate emails, one per item below. Return {"items": [{"id", "headline", "body"}]} with the same ids.`,
     ...packets.map(({ id, packet }) => `\n### ${id}\n${pitchFacts(packet)}`),
   ].join("\n");
