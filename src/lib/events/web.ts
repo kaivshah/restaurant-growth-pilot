@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { DAY, HOUR, cacheKey, cached } from "@/lib/cache";
 import { LATEST_FLASH, geminiGenerate, replyText } from "@/lib/llm/gemini";
+import type Anthropic from "@anthropic-ai/sdk";
+import { CLAUDE_DEFAULT_MODEL, claudeClient, claudeError, fallbackParams } from "@/lib/llm/claude";
 import { withRetry } from "@/lib/llm/retry";
+import { ProviderError } from "@/lib/llm/types";
 import type { EventCategory, LocalEvent } from "./index";
 
 /**
- * Finds upcoming events on the open web: Gemini with Google Search grounding
- * looks for conferences, expos, corporate events at nearby companies,
+ * Finds upcoming events on the open web: Claude's web search (or Gemini with
+ * Google Search) looks for conferences, expos, corporate events at nearby companies,
  * tournaments and community events, and returns them as a list. Each event
  * keeps a link to the page it came from so the owner can check it.
  */
@@ -114,6 +117,79 @@ export function geminiWebEvents(apiKey: string, model: string): WebEventsProvide
   };
 }
 
+/** "100 Example Rd, San Diego, CA 92129" → the city and state, to point web searches at the right place. */
+export function placeOf(address: string): { city: string | null; region: string | null } {
+  const parts = address.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 3) return { city: null, region: null };
+  const state = parts[parts.length - 1].match(/^([A-Za-z]{2})\b/)?.[1] ?? null;
+  return { city: parts[parts.length - 2] || null, region: state };
+}
+
+/** Most searches Claude may run for one event search (each search is billed). */
+const MAX_SEARCHES = 5;
+/** Server-side searches can pause a long turn; it's continued this many times at most. */
+const MAX_CONTINUES = 3;
+
+/**
+ * The same search on Claude, with its web search tool. One request (plus a
+ * continuation if the search pauses), at most five searches, located to the
+ * store's city. Claude's reply is the same JSON list the Gemini search gives.
+ */
+export function claudeWebEvents(apiKey: string, model: string): WebEventsProvider {
+  const client = claudeClient(apiKey);
+  return {
+    name: "web",
+    async find(q) {
+      const { city, region } = placeOf(q.address);
+      const { value } = await withRetry(
+        async (signal) => {
+          const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: webEventsPrompt(q) }];
+          const texts: string[] = [];
+          const sources: string[] = [];
+          try {
+            for (let turn = 0; turn <= MAX_CONTINUES; turn++) {
+              const response = await client.beta.messages.create(
+                {
+                  model,
+                  max_tokens: 16000,
+                  tools: [
+                    {
+                      type: "web_search_20260209",
+                      name: "web_search",
+                      max_uses: MAX_SEARCHES,
+                      user_location: { type: "approximate", country: "US", timezone: "America/Los_Angeles", ...(city ? { city } : {}), ...(region ? { region } : {}) },
+                    },
+                  ],
+                  messages,
+                  // Listing what the searches found doesn't need deep thinking.
+                  output_config: { effort: "low" },
+                  ...fallbackParams(model),
+                },
+                { signal },
+              );
+              for (const block of response.content) {
+                if (block.type === "text") texts.push(block.text);
+                // A failed search comes back as an error object instead of a list of results.
+                if (block.type === "web_search_tool_result" && Array.isArray(block.content)) sources.push(...block.content.map((r) => r.url));
+              }
+              if (response.stop_reason === "refusal") throw new ProviderError("Claude declined this web search", false);
+              // A long search turn pauses; sending it back lets the server carry on where it stopped.
+              if (response.stop_reason !== "pause_turn") break;
+              messages.push({ role: "assistant", content: response.content });
+            }
+          } catch (err) {
+            throw claudeError(err);
+          }
+          return { text: texts.join(""), sources };
+        },
+        { timeoutMs: 180_000, retries: 1 },
+      );
+      console.log(`[web events] Claude searched the web: ${value.sources.length} pages read`);
+      return parseWebEvents(value.text, q.from, q.to, value.sources);
+    },
+  };
+}
+
 /**
  * One web search per area, date window and company list per day, shared by
  * every restaurant nearby. An empty answer is kept only 6 hours.
@@ -144,15 +220,18 @@ export function fakeWebEvents(): WebEventsProvider {
 }
 
 /**
- * Web event search (one Gemini request with Google Search). Runs only when
- * the owner clicks "Search the web for events", or on every scan with
- * WEB_EVENTS="on"; WEB_EVENTS="off" hides it. Sample events when
+ * Web event search: Claude's web search when ANTHROPIC_API_KEY is set,
+ * otherwise Gemini with Google Search (WEB_EVENTS_PROVIDER picks one). Runs
+ * only when the owner clicks "Search the web for events", or on every scan
+ * with WEB_EVENTS="on"; WEB_EVENTS="off" hides it. Sample events when
  * EVENTS_PROVIDER=fake.
  */
 export function webEventsFromEnv(env: NodeJS.ProcessEnv = process.env): WebEventsProvider | null {
   const choice = (env.WEB_EVENTS ?? "").toLowerCase();
   if (choice === "off") return null;
   if ((env.EVENTS_PROVIDER ?? "").toLowerCase() === "fake" && env.NODE_ENV !== "production") return fakeWebEvents();
-  if (!env.GEMINI_API_KEY) return null;
-  return cachedWebEvents(geminiWebEvents(env.GEMINI_API_KEY, env.GEMINI_MODEL || LATEST_FLASH));
+  const provider = (env.WEB_EVENTS_PROVIDER || (env.ANTHROPIC_API_KEY ? "anthropic" : env.GEMINI_API_KEY ? "gemini" : "")).toLowerCase();
+  if (provider === "anthropic" && env.ANTHROPIC_API_KEY) return cachedWebEvents(claudeWebEvents(env.ANTHROPIC_API_KEY, env.ANTHROPIC_MODEL || CLAUDE_DEFAULT_MODEL));
+  if (provider === "gemini" && env.GEMINI_API_KEY) return cachedWebEvents(geminiWebEvents(env.GEMINI_API_KEY, env.GEMINI_MODEL || LATEST_FLASH));
+  return null;
 }

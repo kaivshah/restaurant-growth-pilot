@@ -54,7 +54,7 @@ Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 | Action | AI requests |
 |---|---|
 | Scan my area | None. Google Places and the event APIs only. |
-| Search the web for events (Events tab, only with a `GEMINI_API_KEY`) | 1 (Gemini with Google Search), cached for a day |
+| Search the web for events (Events tab) | 1 request with Claude's web search (at most 5 searches), cached for a day and shared by restaurants nearby |
 | Daily plan: catering picks | 1: a short list of the scanned businesses and events goes with the request; the AI returns the 20 best (`AI_SUGGESTIONS`) with a reason each. No pitches are written. Unchanged data reuses the last answer. |
 | Generate pitch | 1 per 8 pitches |
 | Approving a pitch | 1 per 8 pitches, for the two follow-ups |
@@ -66,7 +66,7 @@ AI jobs run one at a time per restaurant, pitches first; the daily plan runs its
 
 **Checking the AI setup:** `npm run ai:check` sends one email-draft request and one tool call (like the analyst makes) using your `.env`, and prints which model answered and how long it took. The server terminal also prints every Gemini request: `[gemini] … answered in 4.2s`, waits for the free limit, and errors.
 
-**Running a local model with Ollama (free, no limits):** install [Ollama](https://ollama.com), run `ollama pull qwen2.5:7b-instruct`, then in `.env` set `LLM_PROVIDER="ollama"`, `ANALYST_PROVIDER="ollama"`, `AI_TIMEOUT_SECONDS="300"` and `WEB_EVENTS="off"` (the web event search needs Gemini). Nothing leaves your computer. It writes 3 pitches per request and is slower than Gemini (about 20–60 s per request on a MacBook); on an 8 GB Mac use `qwen2.5:3b` instead.
+**Running a local model with Ollama (free, no limits):** install [Ollama](https://ollama.com), run `ollama pull qwen2.5:7b-instruct`, then in `.env` set `LLM_PROVIDER="ollama"`, `ANALYST_PROVIDER="ollama"`, `AI_TIMEOUT_SECONDS="300"` and `WEB_EVENTS="off"` (the web event search needs Claude or Gemini). Nothing leaves your computer. It writes 3 pitches per request and is slower than Gemini (about 20–60 s per request on a MacBook); on an 8 GB Mac use `qwen2.5:3b` instead.
 
 **Operations:** `GET /api/health` returns 200 when the database is reachable (503 when not) and how long the oldest job has waited, for a load balancer or uptime check. The worker cleans up hourly: it drops expired cache entries, finished jobs older than 30 days, and AI logs and unused analyses older than 90 days.
 
