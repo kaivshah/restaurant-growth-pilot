@@ -1,6 +1,7 @@
 import type { Draft, EmailStep, OutboundEmail, PipelineStage, Restaurant } from "@prisma/client";
 import { signToken, verifyToken } from "@/lib/crypto";
 import { db } from "@/lib/db";
+import { emailSendingOn } from "@/lib/features";
 import { enqueueFollowUps, logCall } from "@/lib/drafts";
 import { MailAccountError, MailRetryError, accessTokenFor, appUrl, mailFromEnv } from "@/lib/gmail";
 import { buildRaw } from "@/lib/gmail/mime";
@@ -341,7 +342,7 @@ let running = false;
 
 /** One pass of the outreach work: send what's due (pitches and customer offers), then look for replies. */
 export async function runOutreach() {
-  if (running) return;
+  if (running || !emailSendingOn()) return;
   running = true;
   try {
     await sendDueEmails();

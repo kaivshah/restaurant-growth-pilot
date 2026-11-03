@@ -6,7 +6,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { enqueueDraftJob, kickJobs } from "@/lib/drafts";
-import { REPORT_LABELS, parseReportFile } from "@/lib/reports";
+import { REPORT_LABELS, expandUpload, parseReportFile } from "@/lib/reports";
 import type { ReportType } from "@/lib/reports";
 import { getRestaurant, requireRestaurant, requireUserId } from "@/lib/restaurant";
 
@@ -85,33 +85,40 @@ export async function uploadReports(_prev: UploadState, formData: FormData): Pro
       results.push({ fileName: file.name, ok: false, message: "This file is larger than 5 MB." });
       continue;
     }
-    const parsed = await parseReportFile(file.name, await file.arrayBuffer());
-    if (!parsed.ok) {
-      results.push({ fileName: file.name, ok: false, message: parsed.message });
+    // A WISR export comes as one zip of six reports: each is read on its own.
+    const parts = expandUpload(file.name, await file.arrayBuffer());
+    if ("error" in parts) {
+      results.push({ fileName: file.name, ok: false, message: parts.error });
       continue;
     }
-    const { report } = parsed;
-    const periodStart = report.period ? new Date(report.period.start) : null;
-    const periodEnd = report.period ? new Date(report.period.end) : null;
-    // Uploading the same report for the same week replaces the earlier copy.
-    await db.reportUpload.deleteMany({
-      where: { restaurantId: restaurant.id, reportType: report.type, periodEnd },
-    });
-    await db.reportUpload.create({
-      data: {
-        restaurantId: restaurant.id,
-        fileName: file.name,
-        reportType: report.type,
-        storeNumber: report.storeNumber,
-        periodStart,
-        periodEnd,
-        data: JSON.parse(JSON.stringify(report)),
-      },
-    });
-    results.push({ fileName: file.name, ok: true, message: `Read as ${REPORT_LABELS[report.type]}` });
+    for (const part of parts) results.push(await saveReport(restaurant.id, parts.length > 1 ? `${file.name} › ${part.name}` : part.name, part.data));
   }
   revalidatePath("/setup/reports");
   return { results };
+}
+
+/** Reads one report and stores it; the same report for the same week replaces the earlier copy. */
+async function saveReport(restaurantId: string, fileName: string, data: ArrayBuffer): Promise<UploadResult> {
+  const parsed = await parseReportFile(fileName.split(" › ").pop()!, data);
+  if (!parsed.ok) return { fileName, ok: false, message: parsed.message };
+  const { report } = parsed;
+  const periodStart = report.period ? new Date(report.period.start) : null;
+  const periodEnd = report.period ? new Date(report.period.end) : null;
+  await db.reportUpload.deleteMany({
+    where: { restaurantId, reportType: report.type, periodEnd },
+  });
+  await db.reportUpload.create({
+    data: {
+      restaurantId,
+      fileName,
+      reportType: report.type,
+      storeNumber: report.storeNumber,
+      periodStart,
+      periodEnd,
+      data: JSON.parse(JSON.stringify(report)),
+    },
+  });
+  return { fileName, ok: true, message: `Read as ${REPORT_LABELS[report.type]}` };
 }
 
 export async function removeReport(formData: FormData) {
@@ -150,8 +157,8 @@ export async function confirmNumbers(formData: FormData) {
   }
   revalidatePath("/setup/reports");
   if (flaggedTypes.size === 0 && restaurant.setupCompletedAt) {
-    // Setup is already done, so new numbers mean fresh offer ideas.
-    await enqueueDraftJob(restaurant.id);
+    // Setup is already done, so new numbers mean a fresh plan (deals and catering picks).
+    await enqueueDraftJob(restaurant.id, "DAILY");
     after(() => kickJobs());
   }
   redirect(flaggedTypes.size > 0 ? "/setup/reports?flagged=1" : restaurant.setupCompletedAt ? "/setup/reports?saved=1" : "/setup/menu");
@@ -179,9 +186,8 @@ export async function saveRules(_prev: FormState, formData: FormData): Promise<F
       setupCompletedAt: restaurant.setupCompletedAt ?? new Date(),
     },
   });
-  // Rules may have changed which offers are allowed; rebuild drafts in the background.
-  // The area scan reuses a scan from the last day, so this only re-picks the pitches.
-  await enqueueDraftJob(restaurant.id);
+  // Setup finished or rules changed: scan the area (a scan from the last day is reused),
+  // and the day's plan (deals and the top catering picks) follows the scan.
   await enqueueDraftJob(restaurant.id, "LEADS");
   after(() => kickJobs());
   redirect(restaurant.setupCompletedAt ? "/setup/rules?saved=1" : "/inbox");

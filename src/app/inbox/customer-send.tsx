@@ -2,13 +2,31 @@ import type { Draft } from "@prisma/client";
 import Link from "next/link";
 import { AUDIENCES, audienceCounts, emailable, offerResults } from "@/lib/customers";
 import { db } from "@/lib/db";
+import { emailSendingOn } from "@/lib/features";
 import { mailFromEnv } from "@/lib/gmail";
 import { sendCustomerEmailsNow, sendToCustomers, stopCustomerSends, undoDraft } from "./actions";
+import { CopyPitch } from "./copy-pitch";
 
 const when = (d: Date) => d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" });
 
 /** Under an approved customer offer: send it to the list, then see how it did. */
 export async function CustomerSend({ draft, note }: { draft: Draft; note?: string }) {
+  if (!emailSendingOn()) {
+    return (
+      <div className="flex flex-col gap-3 border-t border-sand bg-primary-soft px-6 py-5 text-primary-ink sm:px-7">
+        <div role="status" className="flex flex-wrap items-center gap-3">
+          <strong className="flex-[1_1_300px]">Approved. Copy the message for a counter card, receipt or social post.</strong>
+          <form action={undoDraft}>
+            <input type="hidden" name="id" value={draft.id} />
+            <button type="submit" className="min-h-11 rounded-field border-2 border-primary px-4 font-bold">
+              Undo
+            </button>
+          </form>
+        </div>
+        <CopyPitch subject={draft.headline} body={draft.body} to={null} />
+      </div>
+    );
+  }
   const how = emailable(draft);
   const [account, counts, [result], sentAny, scheduled] = await Promise.all([
     db.gmailAccount.findUnique({ where: { restaurantId: draft.restaurantId } }),

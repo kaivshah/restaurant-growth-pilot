@@ -4,10 +4,11 @@ import { after } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { Card, Notice, Pill } from "@/components/ui";
 import { analystFromEnv } from "@/lib/analyst";
+import { ensureTodaysPlan } from "@/lib/daily";
 import { db } from "@/lib/db";
 import { jobState, kickJobs, pitchesInProgress, requeueStaleJobs } from "@/lib/drafts";
-import { latestSuggestions, mapsUrl } from "@/lib/leads";
-import { LEAD_SKIP_REASONS, categoryLabel } from "@/lib/leads/score";
+import { OFFER_TEXT, latestSuggestions, mapsUrl } from "@/lib/leads";
+import { EVENT_WINDOW_DAYS, LEAD_SKIP_REASONS, categoryLabel } from "@/lib/leads/score";
 import { requireRestaurant } from "@/lib/restaurant";
 import { scanMyArea, searchWebEvents } from "../inbox/actions";
 import { webEventsFromEnv } from "@/lib/events/web";
@@ -46,6 +47,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const params = await searchParams;
 
   await requeueStaleJobs();
+  // First visit of the day: refresh the area and today's plan.
+  await ensureTodaysPlan(restaurant.id);
   after(() => kickJobs());
 
   const now = new Date();
@@ -55,7 +58,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   ]);
   const view = pick(params.view, ["events", "businesses"], eventCount > 0 ? "events" : "businesses");
   const within = pick(params.within, ["1", "2", "3", "5", "10", "any"], "any");
-  const days = pick(params.days, ["7", "14", "28", "60", "custom"], "60");
+  const days = pick(params.days, ["7", "14", "30", "custom"], "30");
   const from = dateParam(params.from);
   const to = dateParam(params.to);
   // Custom dates: whole days from "from" through "to"; otherwise from now for the chosen weeks.
@@ -63,7 +66,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const custom = days === "custom" || Boolean(from || to);
   const window =
     custom
-      ? { gte: from ? new Date(`${from}T00:00:00-08:00`) : now, lte: to ? new Date(`${to}T23:59:59-08:00`) : new Date(now.getTime() + 60 * DAY_MS) }
+      ? { gte: from ? new Date(`${from}T00:00:00-08:00`) : now, lte: to ? new Date(`${to}T23:59:59-08:00`) : new Date(now.getTime() + EVENT_WINDOW_DAYS * DAY_MS) }
       : { gte: now, lte: new Date(now.getTime() + Number(days) * DAY_MS) };
   const q = (params.q ?? "").trim().slice(0, 80);
   const eventType = pick(params.type, EVENT_TYPES, "");
@@ -91,7 +94,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     view === "events" ? db.event.findMany({ where: eventWhere, include: { venueLead: true }, take: 150 }) : Promise.resolve([]),
     view === "businesses" ? db.lead.findMany({ where: leadWhere, include: { contacts: { orderBy: { createdAt: "asc" } } }, take: 150 }) : Promise.resolve([]),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "LEADS" }, orderBy: { createdAt: "desc" } }),
-    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "SUGGEST" }, orderBy: { createdAt: "desc" } }),
+    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: { in: ["SUGGEST", "DAILY"] } }, orderBy: { createdAt: "desc" } }),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "PITCH" }, orderBy: { createdAt: "desc" } }),
     pitchesInProgress(restaurant.id),
     db.leadScan.findFirst({ where: { restaurantId: restaurant.id }, orderBy: { createdAt: "desc" } }),
@@ -99,6 +102,23 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     db.draft.findMany({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: { in: ["PENDING", "APPROVED"] } }, select: { id: true, leadId: true, eventId: true } }),
     latestSuggestions(restaurant.id),
   ]);
+  // The AI's top picks for today, in its order, with their rows; the lists below leave them out.
+  const picked = suggestions.list;
+  const [pickLeads, pickEvents] = await Promise.all([
+    db.lead.findMany({ where: { restaurantId: restaurant.id, id: { in: picked.map((p) => p.leadId) } } }),
+    db.event.findMany({ where: { restaurantId: restaurant.id, id: { in: picked.flatMap((p) => (p.eventId ? [p.eventId] : [])) }, startsAt: { gte: now } } }),
+  ]);
+  const recommended = picked.flatMap((p) => {
+    const lead = pickLeads.find((l) => l.id === p.leadId);
+    const event = p.eventId ? pickEvents.find((e) => e.id === p.eventId) : null;
+    if (!lead || lead.status === "EXCLUDED" || (p.eventId && !event)) return [];
+    return [{ pick: p, lead, event: event ?? null }];
+  });
+  const shownOnTop = new Set(recommended.map((r) => r.event?.id ?? r.lead.id));
+  const hideTop = <T extends { id: string }>(rows: T[]) => (q ? rows : rows.filter((r) => !shownOnTop.has(r.id)));
+  const otherEvents = hideTop(events);
+  const otherLeads = hideTop(leads);
+
   const scanning = jobState(scanJob) === "working";
   const suggesting = jobState(suggestJob) === "working";
   const pitching = jobState(pitchJob) === "working";
@@ -142,15 +162,15 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         <div className="flex flex-col gap-1">
           <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">Leads & events</h1>
           <p className="max-w-[72ch] text-lg text-ink-2">
-            Businesses and upcoming events within {restaurant.radiusMiles} mi of your store. Pick the ones you like and click <strong>Generate pitch</strong>; the
-            email waits in your <Link href="/inbox?tab=catering">Approval Inbox</Link>.
+            Businesses and events in the next 30 days within {restaurant.radiusMiles} mi of your store. The AI picks the ones most likely to order catering; click{" "}
+            <strong>Generate pitch</strong> on any of them and the draft waits in your <Link href="/inbox?tab=catering">Approval Inbox</Link>.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {aiOn && (
             <form action={suggestAction}>
               <button type="submit" disabled={suggesting || scanning} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60">
-                {suggesting ? "AI is looking…" : "AI suggests"}
+                {suggesting ? "Picking…" : "Refresh picks"}
               </button>
             </form>
           )}
@@ -181,7 +201,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </Notice>
       )}
       {suggestJob?.status === "FAILED" && !suggesting && (
-        <Notice tone="danger" title="AI suggestions didn't finish.">
+        <Notice tone="danger" title="Today's picks didn't finish.">
           {suggestJob.message}
         </Notice>
       )}
@@ -194,6 +214,63 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </p>
       )}
 
+      <section aria-labelledby="top-picks" className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 id="top-picks" className="text-xl font-extrabold">
+            Highly recommended <span className="text-base font-semibold text-muted">({recommended.length})</span>
+          </h2>
+          <p className="text-sm text-muted">
+            {suggestions.at
+              ? `Picked by the AI from ${leadCount} businesses and ${eventCount} events, ${suggestions.at.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" })}`
+              : suggesting
+                ? "The AI is picking the most likely catering customers…"
+                : aiOn
+                  ? "Picks appear here after the area scan."
+                  : "Turn on an AI provider to get picks."}
+          </p>
+        </div>
+        {recommended.length > 0 && (
+          <ul className="grid gap-3 lg:grid-cols-2" aria-label="Highly recommended">
+            {recommended.map(({ pick: p, lead, event }) => {
+              const id = event?.id ?? lead.id;
+              const existing = pitchFor(lead.id, event?.id ?? null);
+              const daysAway = event ? Math.round((event.startsAt.getTime() - now.getTime()) / DAY_MS) : null;
+              return (
+                <li key={id} className="flex flex-col gap-2 rounded-card border-2 border-primary/40 bg-surface px-5 py-4">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <Pill tone="green">Highly recommended</Pill>
+                    <Pill tone={event ? "sun" : "sand"}>{event ? cap(event.category) : categoryLabel(lead.category)}</Pill>
+                    <span className="text-[13px] font-bold text-muted">{p.confidence} confidence</span>
+                  </span>
+                  <p className="text-[17px] font-bold">{event ? event.title : lead.name}</p>
+                  <p className="text-sm font-semibold text-ink-2">
+                    {event
+                      ? [`${fmtDay(event.startsAt)} · in ${daysAway} days`, event.attendance ? `~${event.attendance.toLocaleString("en-US")} expected` : null, event.distanceMiles != null ? `${event.distanceMiles} mi` : null, `pitch ${lead.name}`]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : `${lead.distanceMiles} mi · ${lead.address}`}
+                  </p>
+                  <p className="rounded-field bg-primary-soft px-3 py-2 text-sm text-primary-ink">{p.why}</p>
+                  <p className="text-[13px] text-muted">
+                    For: {p.occasion} · Offer: {OFFER_TEXT[p.offer]}
+                  </p>
+                  <div className="mt-auto pt-1">
+                    {existing ? (
+                      <Link href={`/inbox?tab=catering&d=${existing.id}`} className="flex min-h-11 items-center justify-center rounded-field border-2 border-primary font-bold no-underline">
+                        Open pitch
+                      </Link>
+                    ) : (
+                      <GenerateButton value={event ? `event:${event.id}` : `lead:${lead.id}`} writing={writing.has(id)} />
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <h2 className="pt-2 text-xl font-extrabold">Everything else nearby</h2>
       <nav aria-label="Leads or events" className="flex gap-2 border-b border-line">
         {[
           ["events", `Events (${eventCount})`],
@@ -234,8 +311,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               <select name="days" defaultValue={days} className={field}>
                 <option value="7">In the next week</option>
                 <option value="14">In the next 2 weeks</option>
-                <option value="28">In the next 4 weeks</option>
-                <option value="60">In the next 60 days</option>
+                <option value="30">In the next 30 days</option>
                 <option value="custom">Custom dates</option>
               </select>
             </label>
@@ -245,7 +321,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             </label>
             <label className="flex flex-col gap-1 text-[13px] font-bold text-muted">
               To
-              <input type="date" name="to" defaultValue={to ?? ""} min={ymd(now)} max={ymd(new Date(now.getTime() + 60 * DAY_MS))} className={field} aria-describedby="custom-hint" />
+              <input type="date" name="to" defaultValue={to ?? ""} min={ymd(now)} max={ymd(new Date(now.getTime() + EVENT_WINDOW_DAYS * DAY_MS))} className={field} aria-describedby="custom-hint" />
             </label>
             <p id="custom-hint" className="sr-only">
               Filling in a date uses those dates instead of the period above.
@@ -302,7 +378,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       {view === "events" && (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-muted">
-            {events.length} {events.length === 1 ? "event" : "events"} between {fmtDay(window.gte < now ? now : window.gte)} and {fmtDay(window.lte)}
+            {otherEvents.length} more {otherEvents.length === 1 ? "event" : "events"} between {fmtDay(window.gte < now ? now : window.gte)} and {fmtDay(window.lte)}
             {custom ? " (custom dates)" : ""}. Events less than a week away are marked short notice.
           </p>
           {webOn && (
@@ -316,7 +392,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </div>
       )}
       {view === "events" ? (
-        events.length === 0 ? (
+        otherEvents.length === 0 ? (
           <Card className="p-6 text-ink-2">
             {eventCount === 0
               ? scanning
@@ -324,11 +400,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                 : webOn
                   ? "No upcoming events yet. Events come from Ticketmaster and PredictHQ (add their keys), or click “Search the web for events” (uses 1 AI request)."
                   : "No upcoming events yet. Events come from Ticketmaster and PredictHQ; add their keys in .env and scan again."
-              : "No events match these filters."}
+              : events.length ? "All the matching events are in Highly recommended above." : "No events match these filters."}
           </Card>
         ) : (
           <ul className="flex flex-col gap-3" aria-label="Events">
-            {events.map((e) => {
+            {otherEvents.map((e) => {
               const daysAway = Math.round((e.startsAt.getTime() - now.getTime()) / 86_400_000);
               const ai = aiFor(e.venueLeadId, e.id);
               const existing = pitchFor(e.venueLeadId, e.id);
@@ -384,11 +460,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
             })}
           </ul>
         )
-      ) : leads.length === 0 ? (
-        <Card className="p-6 text-ink-2">{leadCount === 0 ? (scanning ? "Searching…" : "No businesses yet. Click “Scan my area” to search.") : "No businesses match these filters."}</Card>
+      ) : otherLeads.length === 0 ? (
+        <Card className="p-6 text-ink-2">{leadCount === 0 ? (scanning ? "Searching…" : "No businesses yet. Click “Scan my area” to search.") : leads.length ? "All the matching businesses are in Highly recommended above." : "No businesses match these filters."}</Card>
       ) : (
         <ul className="flex flex-col gap-3" aria-label="Businesses">
-          {leads.map((l) => {
+          {otherLeads.map((l) => {
             const ai = aiFor(l.id, null);
             const existing = pitchFor(l.id, null);
             return (

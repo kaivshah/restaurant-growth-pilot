@@ -39,6 +39,8 @@ export interface EventInfo {
 export interface LeadContext extends AnalystContext {
   leads: LeadInfo[];
   events: EventInfo[];
+  /** A few lines about the store, from the day's cached context */
+  brief?: string[];
 }
 
 export const OFFERS = ["free_cookie_platter", "free_drinks_tray", "free_delivery"] as const;
@@ -100,13 +102,13 @@ export const LEAD_TOOLS: ToolDef<unknown, LeadContext>[] = [
   {
     name: "get_local_events",
     description:
-      "Upcoming events near the store in the next 7–60 days (conferences, expos, sports, community events) with estimated attendance. venue_lead_id is the lead to pitch for that event, if we found the venue.",
+      "Upcoming events near the store in the next 30 days (conferences, expos, sports, community events) with estimated attendance. venue_lead_id is the lead to pitch for that event, if we found the venue.",
     inputSchema: {
       type: "object",
-      properties: { min_attendance: { type: "integer", minimum: 0 }, max_days_ahead: { type: "integer", minimum: 7, maximum: 60 } },
+      properties: { min_attendance: { type: "integer", minimum: 0 }, max_days_ahead: { type: "integer", minimum: 2, maximum: 30 } },
       additionalProperties: false,
     },
-    parse: (i) => z.object({ min_attendance: z.number().int().min(0).optional(), max_days_ahead: z.number().int().min(7).max(60).optional() }).parse(i ?? {}),
+    parse: (i) => z.object({ min_attendance: z.number().int().min(0).optional(), max_days_ahead: z.number().int().min(2).max(30).optional() }).parse(i ?? {}),
     run: (ctx, args) => {
       const { min_attendance, max_days_ahead } = args as { min_attendance?: number; max_days_ahead?: number };
       return {
@@ -197,7 +199,7 @@ export const LEAD_SYSTEM = `You help a small restaurant owner win catering order
 
 How to choose:
 - Places where many people eat lunch together, close by: offices, coworking spaces, schools, clinics. More Google reviews suggests more people coming and going. A website means we can look up who orders food.
-- For events, recommend the event (event_id) with its venue's lead (venue_lead_id), ideally 2–6 weeks ahead, e.g. lunch for exhibitors, staff or teams. Skip events without a venue_lead_id.
+- For events, recommend the event (event_id) with its venue's lead (venue_lead_id), ideally 10–30 days ahead, e.g. lunch for exhibitors, staff or teams. Skip events without a venue_lead_id.
 - Give each one an offer the owner's rules allow (free_cookie_platter, free_drinks_tray or free_delivery), a short occasion ("weekly team lunch") and one sentence on why.
 - Leave out weak or risky ones; list a few in skipped with a reason.
 
@@ -253,7 +255,12 @@ export function checkPitch(p: Pitch, ctx: LeadContext, log: ToolLog): string[] {
 export async function runLeadAnalysis(model: AnalystModel, ctx: LeadContext, limits: RunLimits = {}): Promise<LeadOutcome> {
   const res = await runToolLoop(model, {
     system: LEAD_SYSTEM,
-    user: `Restaurant: ${ctx.restaurant.name}. Smallest catering order: ${ctx.restaurant.minCateringOrder} people. Delivery radius: ${ctx.restaurant.radiusMiles} mi.\n\nRecommend up to ${MAX_SUGGESTIONS} businesses or events to pitch.`,
+    user: [
+      `Restaurant: ${ctx.restaurant.name}. Smallest catering order: ${ctx.restaurant.minCateringOrder} people. Delivery radius: ${ctx.restaurant.radiusMiles} mi.`,
+      ...(ctx.brief?.length ? ["", "About the store:", ...ctx.brief.map((b) => `- ${b}`)] : []),
+      "",
+      `Recommend up to ${MAX_SUGGESTIONS} businesses or events to pitch.`,
+    ].join("\n"),
     ctx,
     tools: [],
     prefetchTools: LEAD_TOOLS,

@@ -1,3 +1,4 @@
+import { unzipSync } from "fflate";
 import ExcelJS from "exceljs";
 import { csvToGrid, hasCell } from "./cells";
 import {
@@ -32,6 +33,9 @@ export const REQUIRED_REPORTS: ReportType[] = ["dayPart", "wisrSales", "wisrUnit
 
 export function detectReportType(grid: Grid): ReportType | "laborByEmployee" | null {
   const first = (grid[0]?.[0] ?? "").replace(/^﻿/, "");
+  // Payroll journals and staff schedules hold pay, addresses and names: refused like labor files.
+  if (/^Payroll Journal Report/i.test(first) || hasCell(grid, "Employee Earnings")) return "laborByEmployee";
+  if (grid.slice(0, 3).some((r) => r.some((c) => /Employee Weekly Schedule/i.test(c)))) return "laborByEmployee";
   if (/^Day Part\/Hourly Sales/i.test(first)) return "dayPart";
   if (/^Cash In Week Report/i.test(first)) return "cashInWeek";
   const header = grid[0] ?? [];
@@ -54,7 +58,7 @@ export function parseGrid(grid: Grid): ParseResult {
       ok: false,
       reason: "rejected",
       rejectedType: "laborByEmployee",
-      message: "This file lists employee names and hours. We don't need it, so we haven't kept it.",
+      message: "This file has employee names, hours or pay. We don't need it, so we haven't kept it.",
     };
   }
   if (!type) {
@@ -123,4 +127,35 @@ export async function parseReportFile(fileName: string, data: ArrayBuffer): Prom
     };
   }
   return { ok: false, reason: "unrecognised", message: "Upload a CSV, Excel (.xlsx) or PDF file." };
+}
+
+/** Most files and bytes we unpack from one zip (WISR bundles hold six small CSVs). */
+const ZIP_LIMITS = { files: 30, bytes: 10 * 1024 * 1024 };
+
+/**
+ * The files inside an upload: a WISR zip is unpacked into its reports, any
+ * other file is returned as is. Folders, hidden files and anything that isn't
+ * CSV or Excel are skipped.
+ */
+export function expandUpload(fileName: string, data: ArrayBuffer): { name: string; data: ArrayBuffer }[] | { error: string } {
+  if (!fileName.toLowerCase().endsWith(".zip")) return [{ name: fileName, data }];
+  let total = 0;
+  let count = 0;
+  try {
+    const files = unzipSync(new Uint8Array(data), {
+      filter: (f) => {
+        const base = f.name.split("/").pop() ?? "";
+        const wanted = !base.startsWith(".") && !f.name.startsWith("__MACOSX") && /\.(csv|txt|xlsx)$/i.test(base);
+        if (!wanted) return false;
+        count++;
+        total += f.originalSize;
+        return count <= ZIP_LIMITS.files && total <= ZIP_LIMITS.bytes;
+      },
+    });
+    if (count > ZIP_LIMITS.files || total > ZIP_LIMITS.bytes) return { error: "This zip is too big. Upload the weekly WISR export as it comes." };
+    const out = Object.entries(files).map(([name, bytes]) => ({ name: name.split("/").pop()!, data: bytes.slice().buffer as ArrayBuffer }));
+    return out.length ? out : { error: "This zip has no CSV or Excel reports in it." };
+  } catch {
+    return { error: "We couldn't open this zip file." };
+  }
 }

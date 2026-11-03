@@ -109,10 +109,10 @@ export async function queuePitches(formData: FormData) {
   done();
 }
 
-/** "AI suggests": the analyst marks the most promising businesses and events, in the background. */
+/** "Refresh picks": run the day's plan again, in the background. */
 export async function suggestAction() {
   const restaurant = await requireRestaurant();
-  await enqueueDraftJob(restaurant.id, "SUGGEST");
+  await enqueueDraftJob(restaurant.id, "DAILY");
   after(() => kickJobs());
   done();
 }

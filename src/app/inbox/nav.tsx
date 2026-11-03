@@ -33,11 +33,15 @@ export const SETTINGS_TABS = [
 
 const isActive = (path: string, match: string[]) => match.some((m) => path === m || path.startsWith(`${m}/`));
 
-export function NavLinks({ pending }: { pending: number }) {
+/** Pages that only make sense while email sending is on. */
+const EMAIL_ONLY = ["/pipeline", "/settings/email"];
+
+export function NavLinks({ pending, email }: { pending: number; email: boolean }) {
   const path = usePathname();
+  const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => email || !EMAIL_ONLY.includes(i.href)) }));
   return (
     <div className="flex flex-col gap-4">
-      {GROUPS.map((g, gi) => (
+      {groups.map((g, gi) => (
         <div key={gi} className="flex flex-col gap-1">
           {g.title && <p className="px-3.5 pb-1 text-[12px] font-bold tracking-wide text-muted uppercase">{g.title}</p>}
           {g.items.map((item) => {
@@ -83,11 +87,11 @@ export function MobileMenu({ pending, children }: { pending: number; children: R
   );
 }
 
-export function SettingsTabs() {
+export function SettingsTabs({ email }: { email: boolean }) {
   const path = usePathname();
   return (
     <nav aria-label="Settings" className="flex flex-wrap gap-2 border-b border-line pb-3">
-      {SETTINGS_TABS.map((t) => {
+      {SETTINGS_TABS.filter((t) => email || !EMAIL_ONLY.includes(t.href)).map((t) => {
         const active = path === t.href;
         return (
           <Link

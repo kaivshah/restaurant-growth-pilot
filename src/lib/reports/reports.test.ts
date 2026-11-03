@@ -130,3 +130,28 @@ describe.runIf(hasPrivate)("pilot store reports (private)", () => {
     expect(bread.days.find((d) => d.day === "Sun")?.bread).toBe(743);
   });
 });
+
+describe("uploads", () => {
+  it("unpacks a WISR zip into its reports, skipping hidden and other files", async () => {
+    const { zipSync, strToU8 } = await import("fflate");
+    const names = ["SalesSummary_00000_3-10-2026.csv", "UnitsSummary_00000_3-10-2026.csv", "AdjustedCostOfGoods_00000_3-10-2026.csv"];
+    const zip = zipSync({
+      ...Object.fromEntries(names.map((n) => [`WISR/${n}`, new Uint8Array(readFileSync(join(SAMPLE, n)))])),
+      "__MACOSX/WISR/._SalesSummary.csv": strToU8("junk"),
+      "WISR/readme.pdf": strToU8("not a report"),
+    });
+    const { expandUpload } = await import("./index");
+    const parts = expandUpload("9_01.zip", zip.slice().buffer);
+    expect(Array.isArray(parts) && parts.map((p) => p.name).sort()).toEqual([...names].sort());
+    const types = await Promise.all((parts as { name: string; data: ArrayBuffer }[]).map(async (p) => (await parseReportFile(p.name, p.data)).ok));
+    expect(types).toEqual([true, true, true]);
+  });
+
+  it("refuses payroll and staff schedules as well as labor hours", async () => {
+    const payroll = '"Payroll Journal Report"\n\n"Employee Earnings"\n"Last Name","First Name","Gross Earnings"\n"Doe","Jane","900.00"\n';
+    const out = await parseReportFile("s2k-payroll-summary.csv", new TextEncoder().encode(payroll).buffer as ArrayBuffer);
+    expect(out).toMatchObject({ ok: false, reason: "rejected" });
+    const schedule = 'Weekly Schedule Subway Employee Weekly Schedule,,\nDay,Store hours,Opening\nMonday,8:00 AM–10:00 PM,Jane\n';
+    expect(await parseReportFile("schedule.csv", new TextEncoder().encode(schedule).buffer as ArrayBuffer)).toMatchObject({ ok: false, reason: "rejected" });
+  });
+});

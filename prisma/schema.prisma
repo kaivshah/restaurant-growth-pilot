@@ -242,6 +242,7 @@ enum JobKind {
   SUGGEST // AI marks the most promising leads and events
   PITCH // write pitches the owner asked for (one or many at once)
   FOLLOWUPS // write the day-4 and day-10 follow-ups for approved pitches
+  DAILY // the day's plan: cached store and area context, then deals and the top-20 picks side by side
 }
 
 enum JobStatus {

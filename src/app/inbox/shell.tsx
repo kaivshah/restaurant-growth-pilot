@@ -1,5 +1,6 @@
 import { signOut } from "@/auth";
 import { Logo } from "@/components/ui";
+import { emailSendingOn } from "@/lib/features";
 import { MobileMenu, NavLinks, SettingsTabs } from "./nav";
 
 export function AppShell({
@@ -16,6 +17,7 @@ export function AppShell({
   settings?: boolean;
   children: React.ReactNode;
 }) {
+  const email = emailSendingOn();
   const account = (
     <div className="flex flex-col gap-2 border-t border-sand px-3.5 pt-4 text-sm text-muted">
       <span>
@@ -42,16 +44,16 @@ export function AppShell({
           <Logo />
         </div>
         <MobileMenu pending={pending}>
-          <NavLinks pending={pending} />
+          <NavLinks pending={pending} email={email} />
           {account}
         </MobileMenu>
         <div className="hidden flex-1 flex-col gap-4 md:flex">
-          <NavLinks pending={pending} />
+          <NavLinks pending={pending} email={email} />
           <div className="mt-auto">{account}</div>
         </div>
       </nav>
       <main className="flex min-w-0 flex-col gap-6 p-4 sm:p-8">
-        {settings && <SettingsTabs />}
+        {settings && <SettingsTabs email={email} />}
         {children}
       </main>
     </div>

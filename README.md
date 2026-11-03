@@ -6,6 +6,29 @@ Name not decided yet, so the app calls itself **product**.
 
 ## What works now
 
+### How it works (redesign)
+
+1. **Setup:** the owner enters the store, uploads two exports, and sets their rules.
+   - **Day Part / Hourly Sales & Units** (CSV, one per week).
+   - **The WISR zip as it downloads** (sales, units, discounts, inventory, bread over/short).
+   - One week works; four weeks is better. Cash In Week reports are optional.
+   - Labor hours, payroll and staff schedules are refused and not kept: they hold names and pay, and we don't need them.
+2. **Area scan, no AI:**
+   - Google Places finds offices, coworking spaces, schools, clinics, gyms and venues; results are cached 7 days.
+   - Ticketmaster and PredictHQ find events in the **next 30 days**.
+3. **Today's plan:** one background job each day, or again when the reports, scan or rules change.
+   - First it builds a **daily context** with no AI and caches it until midnight Pacific:
+     - a few lines about the store, worked out from the reports (sales, lunch share, quiet hours for catering prep, catering share, discount level);
+     - the best 80 businesses;
+     - the best 25 events.
+   - Then it makes **two AI requests side by side**:
+     - customer **deals** for people visiting the store (Approval Inbox → Customer offers);
+     - the **20 businesses and events most likely to order catering**, shown as **Highly recommended** at the top of Leads & events, with everything else below.
+4. **Generate pitch** on any row writes a draft from the saved data (one AI request covers up to 8 pitches).
+   - No contact lookup and no sending for now (`CONTACT_LOOKUP` and `EMAIL_SENDING` are off).
+   - Approve the draft, then **Copy email** and send it from your own mail.
+
+
 ### AI: free Gemini by default, Claude later
 
 Everything is written and decided by a real AI model; there are no pre-written drafts. One free **Gemini** key runs both the copywriter and the AI analyst:

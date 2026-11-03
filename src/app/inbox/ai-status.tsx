@@ -46,8 +46,8 @@ export async function AiStatus({ job }: { job: DraftJob | null }) {
       {usage ? (
         <p className="text-[13px] text-muted">
           AI requests today: <strong className="text-ink-2">{usage.count}</strong>
-          {usage.limit ? ` of ${usage.limit}` : ""} (Gemini {usage.limit ? "daily limit" : "free tier; the limit shows here once Google reports it"}). Scans use none, AI
-          suggests uses 1, writing up to 8 pitches uses 1, offer ideas use 1–2.
+          {usage.limit ? ` of ${usage.limit}` : ""} (Gemini {usage.limit ? "daily limit" : "free tier; the limit shows here once Google reports it"}). Scans use none; the
+          daily plan uses about 2–3 (deals and catering picks, side by side); writing up to 8 pitches uses 1.
         </p>
       ) : (
         <p className="text-[13px] text-muted">

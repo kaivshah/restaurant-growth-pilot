@@ -8,6 +8,7 @@ import { cancelSequence, checkReplies, scheduleFollowUps, sendDueEmails, startSe
 import { z } from "zod";
 import { after } from "next/server";
 import { db } from "@/lib/db";
+import { emailSendingOn } from "@/lib/features";
 import { REWRITE_LIMIT, enqueueDraftJob, logCall, kickJobs } from "@/lib/drafts";
 import { missingAiReason, providerFromEnv, rewriteOfferCopy } from "@/lib/llm";
 import { LIMITS, bodyLimit } from "@/lib/llm/validate";
@@ -39,7 +40,7 @@ async function setStatus(formData: FormData, status: "PENDING" | "APPROVED" | "S
       data: status === "APPROVED" ? { status: "APPROVED" } : status === "PENDING" ? { status: "DRAFTED", excludeReason: null } : {},
     });
   }
-  if (draft.kind === "CATERING_PITCH") {
+  if (draft.kind === "CATERING_PITCH" && emailSendingOn()) {
     if (status === "APPROVED") await startSequence(draft.id);
     else await cancelSequence(draft.id, "Approval undone");
   }
@@ -184,9 +185,10 @@ export async function searchWebEvents() {
   revalidatePath("/leads");
 }
 
+/** "Refresh": run the day's plan again now (unchanged parts are reused, so it costs nothing). */
 export async function refreshIdeas() {
   const restaurant = await requireRestaurant();
-  await enqueueDraftJob(restaurant.id);
+  await enqueueDraftJob(restaurant.id, "DAILY");
   after(() => kickJobs());
   revalidatePath("/inbox");
 }

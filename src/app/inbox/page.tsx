@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { ButtonLink, Card, Notice } from "@/components/ui";
+import { ensureTodaysPlan } from "@/lib/daily";
+import { emailSendingOn } from "@/lib/features";
 import { db } from "@/lib/db";
 import { REWRITE_LIMIT, jobState, kickJobs, requeueStaleJobs } from "@/lib/drafts";
 import { requireRestaurant } from "@/lib/restaurant";
@@ -37,6 +39,8 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
 
   // Pick up any work left from a restart.
   await requeueStaleJobs();
+  // First visit of the day: refresh the area and today's plan.
+  await ensureTodaysPlan(restaurant.id);
   after(() => kickJobs());
 
   const [drafts, job, leadsJob, lastScan, pendingPitches, lastRun, newReplies] = await Promise.all([
@@ -44,7 +48,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       where: { restaurantId: restaurant.id, kind: "CUSTOMER_OFFER" },
       orderBy: [{ createdAt: "asc" }],
     }),
-    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "OFFERS" }, orderBy: { createdAt: "desc" } }),
+    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: { in: ["OFFERS", "DAILY"] } }, orderBy: { createdAt: "desc" } }),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "LEADS" }, orderBy: { createdAt: "desc" } }),
     db.leadScan.findFirst({ where: { restaurantId: restaurant.id, status: "DONE" }, orderBy: { createdAt: "desc" } }),
     db.draft.count({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: "PENDING" } }),
@@ -62,7 +66,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     { href: "/inbox?tab=catering", tab: "catering", n: pendingPitches, title: "Catering pitches", sub: `Offices, schools and events within ${restaurant.radiusMiles} mi` },
     { href: "/inbox?tab=offers", tab: "offers", n: pendingOffers, title: "Customer offers", sub: "Ideas from your weekly reports" },
     { href: "/inbox?tab=replies", tab: "replies", n: newReplies, title: "Replies waiting", sub: "Businesses that answered your pitches" },
-  ];
+  ].filter((c) => c.tab !== "replies" || emailSendingOn());
 
   return (
     <AppShell pending={pending} restaurantName={restaurant.name} address={restaurant.outlets[0]?.address}>

@@ -21,13 +21,13 @@ export function UploadBox() {
             </svg>
           </span>
           <span className="text-lg font-bold">{pending ? "Reading your files…" : "Choose files to upload"}</span>
-          <span className="text-sm text-muted">CSV or Excel · up to 20 files · 8–12 weeks of history gives the best results</span>
+          <span className="text-sm text-muted">CSV, Excel or the WISR zip as it downloads · up to 20 files · 4 weeks of history is plenty</span>
           <input
             id="files"
             name="files"
             type="file"
             multiple
-            accept=".csv,.xlsx,.pdf"
+            accept=".csv,.xlsx,.zip,.pdf"
             className="sr-only"
             disabled={pending}
             onChange={() => formRef.current?.requestSubmit()}

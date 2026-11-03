@@ -4,6 +4,7 @@ import { analystFromEnv, buildContext, estimateCostUsd, runLeadAnalysis } from "
 import type { EventInfo, LeadContext, LeadInfo, LeadOutcome, Pitch } from "@/lib/analyst";
 import { type ContactsProvider, QuotaError, contactsFromEnv } from "@/lib/contacts";
 import { db } from "@/lib/db";
+import { contactLookupOn } from "@/lib/features";
 import { DAILY_DRAFT_CAP, type PitchTarget, draftsToday, json, logAnalysisCall, logCall, progress, usableReports } from "@/lib/drafts";
 import { type LocalEvent, eventsFromEnv } from "@/lib/events";
 import { type WebEventsProvider, webEventsFromEnv } from "@/lib/events/web";
@@ -13,7 +14,7 @@ import { INDEPENDENT_LINE } from "@/lib/llm/validate";
 import { isBrandSafe } from "@/lib/offers";
 import { type Place, type PlacesProvider, SEARCHES, placesFromEnv } from "@/lib/places";
 import type { ParsedReport } from "@/lib/reports";
-import { categoryLabel, scoreEvent, scoreLead } from "./score";
+import { EVENT_WINDOW_DAYS, categoryLabel, scoreEvent, scoreLead } from "./score";
 
 /** Google's terms: Place content is refreshed or removed after 30 days. */
 const PLACE_TTL_MS = 30 * 86_400_000;
@@ -190,12 +191,14 @@ async function findEvents(
   counts: Counts,
 ) {
   const active = [...providers.map((p) => p.name), ...(web ? [web.name] : [])];
-  await db.event.deleteMany({ where: { restaurantId: restaurant.id, OR: [{ startsAt: { lt: now } }, { source: { notIn: active } }] } });
+  await db.event.deleteMany({
+    where: { restaurantId: restaurant.id, OR: [{ startsAt: { lt: now } }, { startsAt: { gt: new Date(now.getTime() + EVENT_WINDOW_DAYS * 86_400_000) } }, { source: { notIn: active } }] },
+  });
   if (active.length === 0) {
     counts.notes.push("event search is off");
     return;
   }
-  const to = new Date(now.getTime() + 60 * 86_400_000);
+  const to = new Date(now.getTime() + EVENT_WINDOW_DAYS * 86_400_000);
   const leads = await db.lead.findMany({ where: { restaurantId: restaurant.id }, orderBy: { fitScore: "desc" } });
   let lookups = 0;
 
@@ -434,9 +437,11 @@ export function contactLabel(contact: Pick<Contact, "name" | "email" | "role"> |
 }
 
 async function leadContext(restaurant: Restaurant, now: Date) {
-  const [leads, eventRows, { rows }, decisions] = await Promise.all([
-    db.lead.findMany({ where: { restaurantId: restaurant.id }, include: { contacts: { orderBy: { createdAt: "asc" } } }, orderBy: { fitScore: "desc" }, take: 80 }),
-    db.event.findMany({ where: { restaurantId: restaurant.id, startsAt: { gte: now } }, orderBy: { fitScore: "desc" }, take: 20 }),
+  // Businesses, events and the store brief come from the day's cached context.
+  const { dailyContext } = await import("@/lib/daily");
+  const [daily, excluded, { rows }, decisions] = await Promise.all([
+    dailyContext(restaurant.id, now),
+    db.lead.findMany({ where: { restaurantId: restaurant.id, status: "EXCLUDED", excludeReason: { not: null } }, include: { contacts: true }, take: 15 }),
     usableReports(restaurant.id),
     db.draft.findMany({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: { in: ["APPROVED", "SKIPPED"] } }, orderBy: { decidedAt: "desc" }, take: 30 }),
   ]);
@@ -445,8 +450,9 @@ async function leadContext(restaurant: Restaurant, now: Date) {
     rows.map((r) => ({ report: r.data as unknown as ParsedReport, status: r.status === "CONFIRMED" ? "CONFIRMED" : "READ" })),
     decisions.map((d) => ({ title: d.title, status: d.status as "APPROVED" | "SKIPPED", skipReason: d.skipReason, source: d.source })),
   );
-  const ctx: LeadContext = { ...base, leads: leads.map(toLeadInfo), events: eventRows.map((e) => toEventInfo(e, now)) };
-  return { leads, eventRows, ctx };
+  const leads = [...(daily?.leads ?? []), ...excluded.map(toLeadInfo)];
+  const ctx: LeadContext = { ...base, leads, events: daily?.events ?? [], brief: daily?.brief ?? [] };
+  return { leads, ctx };
 }
 
 function citationsFor(p: Pitch, log: LeadOutcome["toolLog"]) {
@@ -523,7 +529,7 @@ export async function suggestLeads(restaurantId: string, now = new Date()): Prom
 export async function latestSuggestions(restaurantId: string) {
   const run = await db.analysisRun.findFirst({ where: { restaurantId, purpose: "leads", status: "DONE" }, orderBy: { createdAt: "desc" } });
   const list = (run?.accepted as unknown as { suggestions?: Suggestion[] } | null)?.suggestions ?? [];
-  return { runId: run?.id ?? null, at: run?.createdAt ?? null, byLead: new Map(list.map((x) => [x.leadId, x])) };
+  return { runId: run?.id ?? null, at: run?.createdAt ?? null, list, byLead: new Map(list.map((x) => [x.leadId, x])) };
 }
 
 type Prepared = { kind: "plan"; plan: PitchPlan; note?: string } | { kind: "existing"; draftId: string } | { kind: "error"; error: string };
@@ -548,7 +554,7 @@ async function preparePitch(restaurant: Restaurant, target: PitchTarget, suggest
 
   // A contact first, so the email can greet the right person.
   let note: string | undefined;
-  const contacts = contactsFromEnv();
+  const contacts = contactLookupOn() ? contactsFromEnv() : null;
   const domain = domainOf(lead.website);
   const checkedRecently = lead.contactsCheckedAt && now.getTime() - lead.contactsCheckedAt.getTime() < PLACE_TTL_MS;
   if (lead.contacts.length === 0 && contacts && isUsefulDomain(domain) && !checkedRecently) {
@@ -559,7 +565,7 @@ async function preparePitch(restaurant: Restaurant, target: PitchTarget, suggest
     } catch (err) {
       note = err instanceof QuotaError ? `contact lookup paused (${short(err.message, 80)})` : "contact lookup failed";
     }
-  } else if (lead.contacts.length === 0) {
+  } else if (lead.contacts.length === 0 && contacts) {
     note = `no contact yet for ${lead.name}`;
   }
 

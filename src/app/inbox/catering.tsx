@@ -8,7 +8,9 @@ import { LIMITS } from "@/lib/llm/validate";
 import { approveDraft, setSkipReason, skipDraft, undoDraft } from "./actions";
 import { ActionButton } from "../leads/action-button";
 import { findContact } from "../leads/actions";
+import { contactLookupOn, emailSendingOn } from "@/lib/features";
 import { mailFromEnv } from "@/lib/gmail";
+import { CopyPitch } from "./copy-pitch";
 import { ContactForm } from "./contact-form";
 import { Sequence } from "./sequence";
 import { CopyEditor } from "./copy-editor";
@@ -245,7 +247,7 @@ export async function CateringTab({
                   email={selected.contact?.email ?? null}
                   locked={selected.status !== "PENDING"}
                 />
-                {!selected.contact && selected.status === "PENDING" && selected.lead && (
+                {!selected.contact && selected.status === "PENDING" && selected.lead && contactLookupOn() && (
                   <div className="-mt-1">
                     {selected.lead.contactsCheckedAt ? (
                       <p className="text-[13px] text-muted">We already searched this business&apos;s website and found no one. Add a contact above if you know who orders food.</p>
@@ -313,7 +315,23 @@ export async function CateringTab({
                   </form>
                 </div>
               )}
-              {selected.status === "APPROVED" && <Sequence draft={selected} account={account} fake={mailFromEnv()?.name === "fake"} />}
+              {selected.status === "APPROVED" &&
+                (emailSendingOn() ? (
+                  <Sequence draft={selected} account={account} fake={mailFromEnv()?.name === "fake"} />
+                ) : (
+                  <div className="flex flex-col gap-3 border-t border-sand bg-primary-soft px-6 py-5 text-primary-ink sm:px-7">
+                    <div role="status" className="flex flex-wrap items-center gap-3">
+                      <strong className="flex-[1_1_300px]">Approved. Copy the email and send it from your own mail.</strong>
+                      <form action={undoDraft}>
+                        <input type="hidden" name="id" value={selected.id} />
+                        <button type="submit" className="min-h-11 rounded-field border-2 border-primary px-4 font-bold">
+                          Undo
+                        </button>
+                      </form>
+                    </div>
+                    <CopyPitch subject={selected.headline} body={selected.body} to={selected.contact?.email ?? null} />
+                  </div>
+                ))}
               {selected.status === "SKIPPED" && (
                 <div role="status" className="flex flex-col gap-3 border-t border-sand bg-danger-soft px-6 py-5 text-[#5e2121] sm:px-7">
                   <div className="flex flex-wrap items-center gap-3">

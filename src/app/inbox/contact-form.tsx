@@ -23,7 +23,7 @@ export function ContactForm({
       <input type="hidden" name="id" value={id} />
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-sm font-bold">Send to</p>
-        {!email && <p className="text-[13px] font-semibold text-danger">No contact found yet. Add one before this can be sent.</p>}
+        {!email && <p className="text-[13px] text-muted">Optional: who to send it to, if you know. Without a name the email greets &ldquo;Hi there&rdquo;.</p>}
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="flex flex-col gap-1 text-[13px] font-bold text-muted">

@@ -78,19 +78,20 @@ describe("event scoring", () => {
     ...over,
   });
 
-  it("only keeps events 7–60 days ahead and inside the radius", () => {
+  it("only keeps events 2–30 days ahead and inside the radius", () => {
     expect(scoreEvent(ev(1), 1, 3, now).excluded).toBe("Too soon");
     expect(scoreEvent(ev(3), 1, 3, now).excluded).toBeNull();
     expect(scoreEvent(ev(3), 1, 3, now).reasons).toContain("Short notice: only 3 days away");
     expect(scoreEvent(ev(3), 1, 3, now).score).toBeLessThan(scoreEvent(ev(21), 1, 3, now).score);
-    expect(scoreEvent(ev(75), 1, 3, now).excluded).toBe("Too far ahead");
+    expect(scoreEvent(ev(30), 1, 3, now).excluded).toBeNull();
+    expect(scoreEvent(ev(31), 1, 3, now).excluded).toBe("Too far ahead");
     expect(scoreEvent(ev(21), 5, 3, now).excluded).toBe("Outside the delivery radius");
     expect(scoreEvent(ev(21), 1, 3, now).excluded).toBeNull();
   });
 
-  it("scores conferences 2–6 weeks out with big crowds highest", () => {
+  it("scores conferences 10–30 days out with big crowds highest", () => {
     const best = scoreEvent(ev(21), 1, 3, now).score;
-    expect(best).toBeGreaterThan(scoreEvent(ev(55), 1, 3, now).score);
+    expect(best).toBeGreaterThan(scoreEvent(ev(8), 1, 3, now).score);
     expect(best).toBeGreaterThan(scoreEvent(ev(21, { category: "concert" }), 1, 3, now).score);
     expect(best).toBeGreaterThan(scoreEvent(ev(21, { attendance: 50 }), 1, 3, now).score);
     expect(scoreEvent(ev(21), 1, 3, now).reasons).toContain("About 1,200 expected");

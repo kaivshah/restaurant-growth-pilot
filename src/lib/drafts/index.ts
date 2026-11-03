@@ -268,7 +268,7 @@ export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFF
  * and leads pages show it) and printed in the server terminal.
  */
 export async function progress(restaurantId: string, kind: JobKind, text: string) {
-  const label = { LEADS: "scan", SUGGEST: "suggest", PITCH: "pitch", FOLLOWUPS: "follow-ups", OFFERS: "offers" }[kind];
+  const label = { LEADS: "scan", SUGGEST: "suggest", PITCH: "pitch", FOLLOWUPS: "follow-ups", OFFERS: "offers", DAILY: "plan" }[kind];
   console.log(`[${label}] ${text}`);
   await db.draftJob.updateMany({ where: { restaurantId, kind, status: "RUNNING" }, data: { message: text } });
 }
@@ -281,7 +281,7 @@ const draining = new Set<string>();
  * suggestions, follow-ups and offer ideas. Running them side by side only
  * made them queue for the same per-minute limit and time out together.
  */
-export const AI_LANE: JobKind[] = ["PITCH", "SUGGEST", "FOLLOWUPS", "OFFERS"];
+export const AI_LANE: JobKind[] = ["PITCH", "DAILY", "SUGGEST", "FOLLOWUPS", "OFFERS"];
 
 /**
  * Processes queued jobs. Area scans (Google and event APIs) run beside the AI
@@ -383,6 +383,8 @@ async function drain(lane: JobKind[], maxJobs: number) {
             ? await leads!.scanArea(next.restaurantId, { force: next.force, web: (next.payload as { web?: boolean } | null)?.web })
             : next.kind === "SUGGEST"
               ? await leads!.suggestLeads(next.restaurantId)
+              : next.kind === "DAILY"
+                ? await (await import("@/lib/daily")).runDailyPlan(next.restaurantId)
               : next.kind === "PITCH"
                 ? await leads!.generatePitches(next.restaurantId, (next.payload as PitchTarget[] | null) ?? [])
                 : next.kind === "FOLLOWUPS"
@@ -399,6 +401,8 @@ async function drain(lane: JobKind[], maxJobs: number) {
           data: { status: "FAILED", message: err instanceof Error ? err.message : String(err), finishedAt: new Date() },
         });
       }
+      // A finished area scan (even a failed one: the reports still give deals) starts the day's plan.
+      if (next.kind === "LEADS") await enqueueDraftJob(next.restaurantId, "DAILY");
     }
   } finally {
     draining.delete(key);
