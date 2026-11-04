@@ -22,6 +22,8 @@ export interface HourBar {
 
 export interface Insights {
   period: { dayPart: string | null; wisr: string | null };
+  /** How many weeks the numbers are averaged over (up to WEEKS_USED) */
+  weeks: { dayPart: number; wisr: number };
   netSales: number | null;
   cateringSales: number | null;
   customers: number | null;
@@ -58,9 +60,59 @@ const WEEKEND_BREAD_DAYS = new Set(["Sat", "Sun", "Mon"]);
 
 const round = (n: number, dp = 0) => Math.round(n * 10 ** dp) / 10 ** dp;
 
-function latest<T extends ParsedReport["type"]>(reports: ParsedReport[], type: T) {
+/** How many recent weeks the numbers are averaged over: enough to smooth one odd week, recent enough to be current. */
+export const WEEKS_USED = 4;
+
+/** The latest weeks of one report, newest first (one per week: a re-upload replaces the older copy). */
+export function recentWeeks<T extends ParsedReport["type"]>(reports: ParsedReport[], type: T, weeks = WEEKS_USED) {
   const of = reports.filter((r): r is Extract<ParsedReport, { type: T }> => r.type === type);
-  return of.sort((a, b) => (b.period?.end ?? "").localeCompare(a.period?.end ?? ""))[0];
+  const byWeek = new Map<string, Extract<ParsedReport, { type: T }>>();
+  for (const r of of.sort((a, b) => (b.period?.end ?? "").localeCompare(a.period?.end ?? ""))) {
+    const key = r.period?.end ?? `?${byWeek.size}`;
+    if (!byWeek.has(key)) byWeek.set(key, r);
+  }
+  return [...byWeek.values()].slice(0, weeks);
+}
+
+/** The average of the same report over several weeks, field by field. Throws when the weeks don't line up. */
+function averageOf(xs: unknown[]): unknown {
+  const first = xs[0];
+  if (xs.every((x) => typeof x === "number")) return round((xs as number[]).reduce((a, b) => a + b, 0) / xs.length, 2);
+  if (xs.every((x) => x === null || x === undefined)) return first;
+  if (xs.some((x) => typeof x === "number") && xs.every((x) => typeof x === "number" || x === null)) {
+    const nums = xs.filter((x): x is number => typeof x === "number");
+    return round(nums.reduce((a, b) => a + b, 0) / nums.length, 2);
+  }
+  if (typeof first === "string" || typeof first === "boolean") {
+    if (xs.some((x) => x !== first)) throw new Error("weeks don't line up");
+    return first;
+  }
+  if (Array.isArray(first)) {
+    if (xs.some((x) => !Array.isArray(x) || x.length !== first.length)) throw new Error("weeks don't line up");
+    return first.map((_, i) => averageOf(xs.map((x) => (x as unknown[])[i])));
+  }
+  if (first && typeof first === "object") {
+    return Object.fromEntries(Object.keys(first).map((k) => [k, averageOf(xs.map((x) => (x as Record<string, unknown>)?.[k]))]));
+  }
+  return first;
+}
+
+/**
+ * The report averaged over its latest weeks, as one "typical week" with a
+ * period covering them all. Falls back to the newest week when the weeks
+ * can't be lined up (for example a different list of inventory items).
+ */
+function latest<T extends ParsedReport["type"]>(reports: ParsedReport[], type: T): Extract<ParsedReport, { type: T }> | undefined {
+  const weeks = recentWeeks(reports, type);
+  if (weeks.length <= 1) return weeks[0];
+  try {
+    const { period: _p, ...avg } = averageOf(weeks) as Extract<ParsedReport, { type: T }>;
+    const start = weeks.at(-1)!.period?.start ?? null;
+    const end = weeks[0].period?.end ?? null;
+    return { ...avg, period: start && end ? { start, end } : weeks[0].period } as Extract<ParsedReport, { type: T }>;
+  } catch {
+    return weeks[0];
+  }
 }
 
 function shortHour(h: number) {
@@ -143,6 +195,7 @@ export function computeInsights(reports: ParsedReport[]): Insights {
 
   return {
     period: { dayPart: day?.period?.end ?? null, wisr: sales?.period?.end ?? units?.period?.end ?? null },
+    weeks: { dayPart: recentWeeks(reports, "dayPart").length, wisr: recentWeeks(reports, "wisrSales").length },
     netSales: sales?.netSales ?? null,
     cateringSales: sales?.cateringSales ?? null,
     customers: units?.customers ?? null,

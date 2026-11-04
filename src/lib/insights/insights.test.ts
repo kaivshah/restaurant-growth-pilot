@@ -99,3 +99,27 @@ describe.runIf(PRIVATE_FILES.every((f) => existsSync(join(PRIVATE, f))))("insigh
     expect(offers[1].title).toBe("$1 fountain drink with any footlong, 3–5 pm");
   });
 });
+
+describe("several weeks of reports", () => {
+  it("averages the latest 4 weeks, so one odd week doesn't decide everything", async () => {
+    const reports = await loadAll(SAMPLE, SAMPLE_FILES);
+    const sales = reports.find((r) => r.type === "wisrSales")!;
+    const day = reports.find((r) => r.type === "dayPart")!;
+    // Five more weeks of the same store, each with double the sales; only the latest 4 should count.
+    const week = (n: number) => {
+      const end = new Date(Date.parse(sales.period!.end) + n * 7 * 86_400_000).toISOString().slice(0, 10);
+      return { start: new Date(Date.parse(end) - 6 * 86_400_000).toISOString().slice(0, 10), end };
+    };
+    const more: ParsedReport[] = [1, 2, 3, 4, 5].flatMap((n) => [
+      { ...sales, period: week(n), netSales: sales.type === "wisrSales" ? sales.netSales * 2 : 0 } as ParsedReport,
+      { ...day, period: week(n) } as ParsedReport,
+    ]);
+    const one = computeInsights(reports);
+    const many = computeInsights([...reports, ...more]);
+    expect(one.weeks).toEqual({ dayPart: 1, wisr: 1 });
+    expect(many.weeks).toEqual({ dayPart: 4, wisr: 4 });
+    expect(many.netSales).toBe(Math.round(one.netSales! * 2 * 100) / 100); // the 4 doubled weeks, not the old one
+    expect(many.period.wisr).toBe(week(5).end);
+    expect(many.hourly?.lunchShare).toBe(one.hourly?.lunchShare); // same pattern every week
+  });
+});

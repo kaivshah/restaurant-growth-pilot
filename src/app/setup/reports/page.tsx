@@ -2,12 +2,14 @@ import { Card, CheckIcon, Notice, Pill } from "@/components/ui";
 import { db } from "@/lib/db";
 import { REPORT_LABELS, REQUIRED_REPORTS, summarise } from "@/lib/reports";
 import type { ParsedReport, ReportType } from "@/lib/reports";
+import { WEEKS_USED } from "@/lib/insights";
 import { requireRestaurant } from "@/lib/restaurant";
 import { confirmNumbers, removeReport } from "../actions";
 import { ConfirmList } from "./confirm-list";
 import { UploadBox } from "./upload-box";
 
-const OPTIONAL_REPORTS: ReportType[] = ["wisrInventoryItems", "wisrInventoryCategories", "wisrBreadOverShort", "cashInWeek"];
+/** What the owner actually uploads: the Day Part CSV, and the WISR zip with six reports inside. */
+const WISR_PARTS: ReportType[] = ["wisrSales", "wisrUnits", "wisrAdjCogs", "wisrInventoryItems", "wisrInventoryCategories", "wisrBreadOverShort"];
 
 const WHY: Record<ReportType, string> = {
   dayPart: "Sales by hour and day: finds your slow times",
@@ -40,7 +42,22 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
   // Latest upload of each type
   const latest = new Map<string, (typeof uploads)[number]>();
   for (const u of uploads) if (!latest.has(u.reportType)) latest.set(u.reportType, u);
-  const requiredDone = REQUIRED_REPORTS.filter((t) => latest.has(t)).length;
+  // Two uploads to start: the Day Part CSV, and a WISR zip with its three required reports.
+  const dayPartDone = latest.has("dayPart");
+  const wisrDone = REQUIRED_REPORTS.filter((t) => t !== "dayPart").every((t) => latest.has(t));
+  const uploadsDone = Number(dayPartDone) + Number(wisrDone);
+
+  // Every week uploaded per report, newest first; the AI averages the latest WEEKS_USED of them.
+  const weeksOf = (type: ReportType) => [...new Set(uploads.filter((u) => u.reportType === type && u.status !== "FLAGGED" && u.periodEnd).map((u) => u.periodEnd!.toISOString()))].map((iso) => uploads.find((u) => u.reportType === type && u.periodEnd?.toISOString() === iso)!);
+  const usedLabel = (type: ReportType) => {
+    const weeks = weeksOf(type);
+    if (!weeks.length) return null;
+    const used = weeks.slice(0, WEEKS_USED);
+    const range = weekLabel(used.at(-1)!.periodStart, used[0].periodEnd);
+    return weeks.length > used.length
+      ? `${weeks.length} weeks uploaded · AI uses the latest ${used.length} (${range})`
+      : `${weeks.length} ${weeks.length === 1 ? "week" : "weeks"} · AI uses ${weeks.length === 1 ? "it" : "all of them"} (${range})`;
+  };
 
   // Do the required reports cover different weeks?
   const requiredEnds = new Set(
@@ -70,20 +87,20 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
         )}
         <div className="min-w-0">
           <p className="font-semibold">{REPORT_LABELS[type]}</p>
-          <p className="text-[13px] break-words text-muted">{u ? u.fileName : WHY[type]}</p>
+          <p className="text-[13px] break-words text-muted">{u ? usedLabel(type) : WHY[type]}</p>
         </div>
         {u ? (
           <div className="flex items-center gap-2">
-            {u.status === "FLAGGED" ? <Pill tone="danger">Check again</Pill> : <Pill tone={mixedWeeks && REQUIRED_REPORTS.includes(type) ? "sun" : "sand"}>{weekLabel(u.periodStart, u.periodEnd)}</Pill>}
+            {u.status === "FLAGGED" ? <Pill tone="danger">Check again</Pill> : <Pill tone={mixedWeeks && REQUIRED_REPORTS.includes(type) ? "sun" : "sand"}>Latest {weekLabel(u.periodStart, u.periodEnd)}</Pill>}
             <form action={removeReport}>
               <input type="hidden" name="id" value={u.id} />
-              <button type="submit" className="min-h-11 rounded-field px-3 text-sm font-semibold text-muted hover:text-danger" aria-label={`Remove ${REPORT_LABELS[type]}`}>
-                Remove
+              <button type="submit" className="min-h-11 rounded-field px-3 text-sm font-semibold text-muted hover:text-danger" aria-label={`Remove the latest week of ${REPORT_LABELS[type]}`}>
+                Remove latest
               </button>
             </form>
           </div>
         ) : (
-          <span className="text-sm text-muted">Not added</span>
+          <span className="text-sm text-muted">{REQUIRED_REPORTS.includes(type) ? "Not added" : "Optional"}</span>
         )}
       </li>
     );
@@ -94,7 +111,7 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
       <div className="flex flex-col gap-2">
         <h1 className="text-[32px] font-extrabold leading-tight tracking-tight">{restaurant.setupCompletedAt ? "Sales reports" : "Add your weekly reports"}</h1>
         <p className="max-w-[62ch] text-muted">
-          Export them from your back office as CSV or Excel. We read the numbers, show you what we found, and use them only after you confirm.
+          Upload the Day Part CSVs and the WISR zips from your back office, as they download (4 recent weeks is ideal). We read the numbers, show you what we found, and use them only after you confirm.
         </p>
       </div>
 
@@ -112,14 +129,19 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
           <Card className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-5">
               <h2 className="text-lg font-bold">Your files</h2>
-              <Pill tone={requiredDone === REQUIRED_REPORTS.length ? "green" : "sand"}>
-                {requiredDone} of {REQUIRED_REPORTS.length} required added
-              </Pill>
+              <Pill tone={uploadsDone === 2 ? "green" : "sand"}>{uploadsDone} of 2 uploads added</Pill>
             </div>
-            <p className="bg-ground px-6 py-2 text-[13px] font-bold text-muted">Required to start</p>
-            <ul>{REQUIRED_REPORTS.map(row)}</ul>
-            <p className="border-t border-sand bg-ground px-6 py-2 text-[13px] font-bold text-muted">For better recommendations</p>
-            <ul>{OPTIONAL_REPORTS.map(row)}</ul>
+            <p className="bg-ground px-6 py-2 text-[13px] font-bold text-muted">1. Day Part / Hourly Sales &amp; Units (one CSV per week)</p>
+            <ul>{row("dayPart")}</ul>
+            <p className="border-t border-sand bg-ground px-6 py-2 text-[13px] font-bold text-muted">
+              2. WISR export: upload the zip as it downloads; these six reports are inside it
+            </p>
+            <ul>{WISR_PARTS.map(row)}</ul>
+            <p className="border-t border-sand bg-ground px-6 py-2 text-[13px] font-bold text-muted">Optional</p>
+            <ul>{row("cashInWeek")}</ul>
+            <p className="border-t border-sand px-6 py-3 text-[13px] text-muted">
+              The AI uses weekly averages of your latest {WEEKS_USED} weeks, so one unusual week doesn&apos;t skew the deals. Older weeks are kept for comparison.
+            </p>
           </Card>
         </div>
 

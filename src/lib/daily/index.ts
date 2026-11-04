@@ -43,6 +43,8 @@ const hourName = (h: number) => (h === 0 ? "12 am" : h < 12 ? `${h} am` : h === 
  */
 export function storeBrief(ins: Insights, restaurant: Pick<Restaurant, "minCateringOrder" | "radiusMiles" | "openingHours">): string[] {
   const out: string[] = [];
+  const weeks = Math.max(ins.weeks.dayPart, ins.weeks.wisr);
+  if (weeks > 1) out.push(`Numbers are weekly averages over the last ${weeks} weeks of reports.`);
   if (ins.netSales != null) out.push(`Weekly net sales about ${money(ins.netSales)}${ins.customers ? ` from about ${ins.customers.toLocaleString("en-US")} customers` : ""}${ins.averageTicket ? `, average order $${ins.averageTicket.toFixed(2)}` : ""}.`);
   if (ins.cateringSales != null && ins.netSales) {
     const pct = Math.round((ins.cateringSales / ins.netSales) * 100);

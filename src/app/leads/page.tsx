@@ -229,6 +229,20 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                   : "Turn on an AI provider to get picks."}
           </p>
         </div>
+        {suggestions.blocked.length > 0 && (
+          <details className="rounded-field border border-line bg-surface px-4 py-2.5 text-sm">
+            <summary className="cursor-pointer font-semibold text-ink-2">
+              {suggestions.blocked.length === 1 ? "1 AI pick was left out because it failed our checks" : `${suggestions.blocked.length} AI picks were left out because they failed our checks`}
+            </summary>
+            <ul className="mt-2 flex flex-col gap-1 text-[13px] text-muted">
+              {suggestions.blocked.map((b, i) => (
+                <li key={i}>
+                  <strong className="text-ink-2">{b.title}:</strong> {b.reason}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
         {recommended.length > 0 && (
           <ul className="grid gap-3 lg:grid-cols-2" aria-label="Highly recommended">
             {recommended.map(({ pick: p, lead, event }) => {
@@ -240,7 +254,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                   <span className="flex flex-wrap items-center gap-1.5">
                     <Pill tone="green">Highly recommended</Pill>
                     <Pill tone={event ? "sun" : "sand"}>{event ? cap(event.category) : categoryLabel(lead.category)}</Pill>
-                    <span className="text-[13px] font-bold text-muted">{p.confidence} confidence</span>
+                    <span className="text-[13px] font-bold text-muted">{p.by === "fit" ? "Best fit score" : `AI pick · ${p.confidence} confidence`}</span>
                   </span>
                   <p className="text-[17px] font-bold">{event ? event.title : lead.name}</p>
                   <p className="text-sm font-semibold text-ink-2">

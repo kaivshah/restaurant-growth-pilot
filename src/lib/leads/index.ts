@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Contact, Event as EventRow, Lead, Restaurant } from "@prisma/client";
-import { analystFromEnv, buildContext, estimateCostUsd, runLeadAnalysis } from "@/lib/analyst";
+import { analystFromEnv, buildContext, defaultPitches, estimateCostUsd, runLeadAnalysis } from "@/lib/analyst";
+import { MAX_SUGGESTIONS } from "@/lib/analyst/leads";
 import type { EventInfo, LeadContext, LeadInfo, LeadOutcome, Pitch } from "@/lib/analyst";
 import { type ContactsProvider, QuotaError, contactsFromEnv } from "@/lib/contacts";
 import { db } from "@/lib/db";
@@ -462,7 +463,17 @@ function citationsFor(p: Pitch, log: LeadOutcome["toolLog"]) {
   });
 }
 
-export type Suggestion = { leadId: string; eventId: string | null; offer: Pitch["offer"]; occasion: string; why: string; confidence: string; citations: { label: string; value: number; source: string }[] };
+export type Suggestion = {
+  leadId: string;
+  eventId: string | null;
+  offer: Pitch["offer"];
+  occasion: string;
+  why: string;
+  confidence: string;
+  citations: { label: string; value: number; source: string }[];
+  /** "ai": picked by the AI; "fit": added from the best fit scores when the AI picked fewer than 20 */
+  by?: "ai" | "fit";
+};
 
 /**
  * One SUGGEST job: one AI request with a compact list of the scanned
@@ -496,7 +507,7 @@ export async function suggestLeads(restaurantId: string, now = new Date()): Prom
     if (outcome.fatal) throw new AiConfigError(outcome.error ?? "The AI provider rejected the request.");
     throw new AiBusyError(outcome.error ?? "The AI is busy.", outcome.busy?.retryAfterMs);
   }
-  const suggestions: Suggestion[] = outcome.pitches.map((p) => ({
+  const aiPicks: Suggestion[] = outcome.pitches.map((p) => ({
     leadId: p.lead_id,
     eventId: p.event_id ?? null,
     offer: p.offer,
@@ -504,11 +515,26 @@ export async function suggestLeads(restaurantId: string, now = new Date()): Prom
     why: p.why,
     confidence: p.confidence,
     citations: citationsFor(p, outcome.toolLog),
+    by: "ai",
   }));
+  // The list always has the full 20: the best fit scores fill whatever the AI didn't pick (or had blocked).
+  const taken = new Set(aiPicks.map((p) => p.leadId));
+  const topUp: Suggestion[] = defaultPitches(ctx, { exclude: taken, limit: MAX_SUGGESTIONS - aiPicks.length }).map((p) => ({
+    leadId: p.lead_id,
+    eventId: p.event_id ?? null,
+    offer: p.offer,
+    occasion: p.occasion,
+    why: p.why,
+    confidence: "medium",
+    citations: [],
+    by: "fit",
+  }));
+  const suggestions = [...aiPicks, ...topUp];
   await db.analysisRun.update({
     where: { id: run.id },
     data: {
-      status: outcome.status,
+      // Kept as a result even when the AI didn't finish, as long as there are best-fit matches to show.
+      status: outcome.status === "DONE" || suggestions.length ? "DONE" : outcome.status,
       model: analyst.model,
       error: outcome.error ?? null,
       accepted: json({ pitches: outcome.pitches, skipped: outcome.skipped, suggestions }),
@@ -521,15 +547,18 @@ export async function suggestLeads(restaurantId: string, now = new Date()): Prom
       finishedAt: new Date(),
     },
   });
-  if (outcome.status !== "DONE") return `The AI didn't finish: ${short(outcome.error ?? "unknown error")}`;
-  return `AI suggested ${suggestions.length} of ${ctx.leads.filter((l) => l.status !== "EXCLUDED").length} businesses (${outcome.rejected.length} blocked by checks).`;
+  const top = topUp.length ? `, plus ${topUp.length} best-fit matches` : "";
+  if (outcome.status !== "DONE") return `The AI didn't finish (${short(outcome.error ?? "unknown error")}); showing ${topUp.length} best-fit matches.`;
+  return `AI picked ${aiPicks.length} of ${ctx.leads.filter((l) => l.status !== "EXCLUDED").length} businesses${top}${outcome.rejected.length ? ` (${outcome.rejected.length} AI picks blocked by checks)` : ""}.`;
 }
 
 /** The latest AI suggestions, keyed by lead id. */
 export async function latestSuggestions(restaurantId: string) {
   const run = await db.analysisRun.findFirst({ where: { restaurantId, purpose: "leads", status: "DONE" }, orderBy: { createdAt: "desc" } });
   const list = (run?.accepted as unknown as { suggestions?: Suggestion[] } | null)?.suggestions ?? [];
-  return { runId: run?.id ?? null, at: run?.createdAt ?? null, list, byLead: new Map(list.map((x) => [x.leadId, x])) };
+  // AI picks our checks blocked, with why, so the owner can see what happened.
+  const blocked = ((run?.rejected as unknown as { title: string; reasons: string[] }[] | null) ?? []).map((r) => ({ title: r.title, reason: r.reasons[0] ?? "" }));
+  return { runId: run?.id ?? null, at: run?.createdAt ?? null, list, blocked, byLead: new Map(list.map((x) => [x.leadId, x])) };
 }
 
 type Prepared = { kind: "plan"; plan: PitchPlan; note?: string } | { kind: "existing"; draftId: string } | { kind: "error"; error: string };

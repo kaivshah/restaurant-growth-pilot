@@ -129,6 +129,18 @@ export const LEAD_TOOLS: ToolDef<unknown, LeadContext>[] = [
       };
     },
   },
+  {
+    name: "get_store_brief",
+    description: "A few facts about the store from its reports (weekly averages): sales, lunch share, quiet hours, catering so far.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parse: () => ({}),
+    run: (ctx) => ({
+      source: "Your reports",
+      facts: ctx.brief ?? [],
+      // The figures in the facts, so a pick that quotes one passes the number checks.
+      figures: (ctx.brief ?? []).flatMap((b) => [...b.matchAll(/\d[\d,]*(?:\.\d+)?/g)].map((m) => Number(m[0].replace(/,/g, "")))),
+    }),
+  },
   ...(DATA_TOOLS.filter((t) => ["get_rules", "get_week_summary", "get_hourly_sales", "get_past_decisions"].includes(t.name)) as ToolDef<unknown, LeadContext>[]),
 ];
 
@@ -255,16 +267,11 @@ export function checkPitch(p: Pitch, ctx: LeadContext, log: ToolLog): string[] {
 export async function runLeadAnalysis(model: AnalystModel, ctx: LeadContext, limits: RunLimits = {}): Promise<LeadOutcome> {
   const res = await runToolLoop(model, {
     system: LEAD_SYSTEM,
-    user: [
-      `Restaurant: ${ctx.restaurant.name}. Smallest catering order: ${ctx.restaurant.minCateringOrder} people. Delivery radius: ${ctx.restaurant.radiusMiles} mi.`,
-      ...(ctx.brief?.length ? ["", "About the store:", ...ctx.brief.map((b) => `- ${b}`)] : []),
-      "",
-      `Recommend up to ${MAX_SUGGESTIONS} businesses or events to pitch.`,
-    ].join("\n"),
+    user: `Restaurant: ${ctx.restaurant.name}. Smallest catering order: ${ctx.restaurant.minCateringOrder} people. Delivery radius: ${ctx.restaurant.radiusMiles} mi.\n\nRecommend up to ${MAX_SUGGESTIONS} businesses or events to pitch.`,
     ctx,
     tools: [],
     prefetchTools: LEAD_TOOLS,
-    prefetch: [{ name: "get_rules" }, { name: "list_leads" }, { name: "get_local_events" }],
+    prefetch: [{ name: "get_rules" }, { name: "get_store_brief" }, { name: "list_leads" }, { name: "get_local_events" }],
     oneShot: true,
     submit: { name: "submit_pitches", description: "Submit the recommended businesses and events, with an offer each, and the ones you skipped.", jsonSchema: SUBMIT_JSON, schema: LeadSubmission },
     // One request, plus one more only if the answer needs fixing.
