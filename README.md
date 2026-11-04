@@ -11,7 +11,7 @@ Name not decided yet, so the app calls itself **product**.
 1. **Setup:** the owner enters the store, uploads two exports, and sets their rules.
    - **Day Part / Hourly Sales & Units** (CSV, one per week).
    - **The WISR zip as it downloads** (sales, units, discounts, inventory, bread over/short).
-   - One week works; four weeks is better. Cash In Week reports are optional.
+   - Each has its own section with one upload button per week: 4 weeks of each are needed, up to 8 can be added (more weeks is more for the AI to read). The AI uses weekly averages of all of them. Cash In Week is optional.
    - Labor hours, payroll and staff schedules are refused and not kept: they hold names and pay, and we don't need them.
 2. **Area scan, no AI:**
    - Google Places finds offices, coworking spaces, schools, clinics, gyms and venues; results are cached 7 days.

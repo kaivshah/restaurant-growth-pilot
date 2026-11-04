@@ -16,6 +16,7 @@ import type { Grid, ParsedReport, ParseResult, ReportType } from "./types";
 
 export * from "./types";
 export { summarise } from "./summary";
+export * from "./weeks";
 
 export const REPORT_LABELS: Record<ReportType, string> = {
   dayPart: "Day Part / Hourly Sales & Units",

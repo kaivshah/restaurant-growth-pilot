@@ -60,8 +60,8 @@ const WEEKEND_BREAD_DAYS = new Set(["Sat", "Sun", "Mon"]);
 
 const round = (n: number, dp = 0) => Math.round(n * 10 ** dp) / 10 ** dp;
 
-/** How many recent weeks the numbers are averaged over: enough to smooth one odd week, recent enough to be current. */
-export const WEEKS_USED = 4;
+/** Most weeks the numbers are averaged over: owners upload 4 to 8 weeks (see MAX_WEEKS). */
+export const WEEKS_USED = 8;
 
 /** The latest weeks of one report, newest first (one per week: a re-upload replaces the older copy). */
 export function recentWeeks<T extends ParsedReport["type"]>(reports: ParsedReport[], type: T, weeks = WEEKS_USED) {
@@ -106,7 +106,7 @@ function latest<T extends ParsedReport["type"]>(reports: ParsedReport[], type: T
   const weeks = recentWeeks(reports, type);
   if (weeks.length <= 1) return weeks[0];
   try {
-    const { period: _p, ...avg } = averageOf(weeks) as Extract<ParsedReport, { type: T }>;
+    const avg = averageOf(weeks) as Extract<ParsedReport, { type: T }>;
     const start = weeks.at(-1)!.period?.start ?? null;
     const end = weeks[0].period?.end ?? null;
     return { ...avg, period: start && end ? { start, end } : weeks[0].period } as Extract<ParsedReport, { type: T }>;

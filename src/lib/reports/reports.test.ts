@@ -155,3 +155,28 @@ describe("uploads", () => {
     expect(await parseReportFile("schedule.csv", new TextEncoder().encode(schedule).buffer as ArrayBuffer)).toMatchObject({ ok: false, reason: "rejected" });
   });
 });
+
+describe("weekly upload sections", () => {
+  it("groups uploads into weeks per section, oldest first, and knows which WISR weeks are complete", async () => {
+    const { weeksOf, completeWeeks, groupOf } = await import("./index");
+    const at = (d: string) => new Date(`${d}T00:00:00Z`);
+    const u = (reportType: string, end: string, fileName = `${reportType}.csv`, status = "READ") => ({ reportType, periodStart: null, periodEnd: at(end), fileName, status });
+    const uploads = [
+      u("dayPart", "2026-09-01"),
+      u("dayPart", "2026-08-25"),
+      ...["wisrSales", "wisrUnits", "wisrAdjCogs", "wisrInventoryItems"].map((t) => u(t, "2026-09-01", `9_01.zip › ${t}.csv`)),
+      u("wisrSales", "2026-08-25", "8_25.zip › SalesSummary.csv"),
+    ];
+    const day = weeksOf("dayPart", uploads);
+    expect(day.map((w) => w.end)).toEqual(["2026-08-25", "2026-09-01"]);
+    const wisr = weeksOf("wisr", uploads);
+    expect(wisr.map((w) => [w.end, w.missing])).toEqual([
+      ["2026-08-25", ["wisrUnits", "wisrAdjCogs"]],
+      ["2026-09-01", []],
+    ]);
+    expect(wisr[1].fileNames).toEqual(["9_01.zip"]);
+    expect(completeWeeks(wisr)).toHaveLength(1);
+    expect(groupOf("wisrBreadOverShort")).toBe("wisr");
+    expect(groupOf("dayPart")).toBe("dayPart");
+  });
+});

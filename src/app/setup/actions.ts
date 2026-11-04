@@ -6,7 +6,8 @@ import { after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { enqueueDraftJob, kickJobs } from "@/lib/drafts";
-import { REPORT_LABELS, expandUpload, parseReportFile } from "@/lib/reports";
+import { GROUP_NAMES, GROUP_TYPES, MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, completeWeeks, expandUpload, groupOf, parseReportFile, weeksOf } from "@/lib/reports";
+import type { ParsedReport } from "@/lib/reports";
 import type { ReportType } from "@/lib/reports";
 import { getRestaurant, requireRestaurant, requireUserId } from "@/lib/restaurant";
 
@@ -101,7 +102,10 @@ export async function uploadReports(_prev: UploadState, formData: FormData): Pro
 async function saveReport(restaurantId: string, fileName: string, data: ArrayBuffer): Promise<UploadResult> {
   const parsed = await parseReportFile(fileName.split(" › ").pop()!, data);
   if (!parsed.ok) return { fileName, ok: false, message: parsed.message };
-  const { report } = parsed;
+  return storeReport(restaurantId, fileName, parsed.report);
+}
+
+async function storeReport(restaurantId: string, fileName: string, report: ParsedReport): Promise<UploadResult> {
   const periodStart = report.period ? new Date(report.period.start) : null;
   const periodEnd = report.period ? new Date(report.period.end) : null;
   await db.reportUpload.deleteMany({
@@ -119,6 +123,66 @@ async function saveReport(restaurantId: string, fileName: string, data: ArrayBuf
     },
   });
   return { fileName, ok: true, message: `Read as ${REPORT_LABELS[report.type]}` };
+}
+
+/**
+ * One week's upload into a section (Day Part, WISR or Cash In Week): a file
+ * of the wrong kind is refused, and a ninth week is refused (eight is the
+ * most the AI reads). Uploading a week that's already there replaces it.
+ */
+export async function uploadWeek(_prev: UploadState, formData: FormData): Promise<UploadState> {
+  const restaurant = await requireRestaurant();
+  const group = String(formData.get("group") ?? "") as UploadGroup;
+  if (!(group in GROUP_TYPES)) return { results: [{ fileName: "", ok: false, message: "Unknown section." }] };
+  const files = formData.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
+  if (files.length === 0) return { results: [{ fileName: "", ok: false, message: "Choose a file." }] };
+
+  const existing = await db.reportUpload.findMany({ where: { restaurantId: restaurant.id, reportType: { in: GROUP_TYPES[group] } }, select: { periodEnd: true } });
+  const weeks = new Set(existing.flatMap((u) => (u.periodEnd ? [u.periodEnd.toISOString().slice(0, 10)] : [])));
+  const results: UploadResult[] = [];
+  for (const file of files.slice(0, MAX_FILES)) {
+    if (file.size > MAX_BYTES) {
+      results.push({ fileName: file.name, ok: false, message: "This file is larger than 5 MB." });
+      continue;
+    }
+    const parts = expandUpload(file.name, await file.arrayBuffer());
+    if ("error" in parts) {
+      results.push({ fileName: file.name, ok: false, message: parts.error });
+      continue;
+    }
+    for (const part of parts) {
+      const name = parts.length > 1 ? `${file.name} › ${part.name}` : part.name;
+      const parsed = await parseReportFile(part.name, part.data);
+      if (!parsed.ok) {
+        results.push({ fileName: name, ok: false, message: parsed.message });
+        continue;
+      }
+      const type = parsed.report.type;
+      if (groupOf(type) !== group) {
+        results.push({ fileName: name, ok: false, message: `This is a ${REPORT_LABELS[type]} file. Upload it under ${GROUP_NAMES[groupOf(type)]}.` });
+        continue;
+      }
+      const week = parsed.report.period?.end ?? null;
+      if (week && !weeks.has(week) && weeks.size >= MAX_WEEKS) {
+        results.push({ fileName: name, ok: false, message: `You already have ${MAX_WEEKS} weeks of ${GROUP_NAMES[group]}. Remove one before adding another.` });
+        continue;
+      }
+      if (week) weeks.add(week);
+      results.push(await storeReport(restaurant.id, name, parsed.report));
+    }
+  }
+  revalidatePath("/setup/reports");
+  return { results };
+}
+
+/** Removes one week of a section (for WISR, all six reports of that week). */
+export async function removeWeek(formData: FormData) {
+  const restaurant = await requireRestaurant();
+  const group = String(formData.get("group") ?? "") as UploadGroup;
+  const end = String(formData.get("end") ?? "");
+  if (!(group in GROUP_TYPES) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return;
+  await db.reportUpload.deleteMany({ where: { restaurantId: restaurant.id, reportType: { in: GROUP_TYPES[group] }, periodEnd: new Date(end) } });
+  revalidatePath("/setup/reports");
 }
 
 export async function removeReport(formData: FormData) {
@@ -148,6 +212,9 @@ export async function confirmNumbers(formData: FormData) {
 
   const date = new Date(periodEnd);
   if (Number.isNaN(date.getTime())) redirect("/setup/reports");
+  // Four weeks of each export are needed before the numbers are used.
+  const uploads = await db.reportUpload.findMany({ where: { restaurantId: restaurant.id }, select: { reportType: true, periodStart: true, periodEnd: true, fileName: true, status: true } });
+  if (completeWeeks(weeksOf("dayPart", uploads)).length < MIN_WEEKS || completeWeeks(weeksOf("wisr", uploads)).length < MIN_WEEKS) redirect("/setup/reports?need=1");
 
   for (const type of weekTypes) {
     await db.reportUpload.updateMany({
