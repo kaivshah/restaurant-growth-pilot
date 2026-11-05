@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { enqueueDraftJob, kickJobs } from "@/lib/drafts";
+import { REPLAN_DELAY_MS, enqueueDraftJob, kickJobs, scheduleReplan } from "@/lib/drafts";
 import { GROUP_NAMES, GROUP_TYPES, MAX_EXTRA_FILES, MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, completeWeeks, expandUpload, groupOf, parseReportFile, weeksOf } from "@/lib/reports";
 import type { ParsedReport } from "@/lib/reports";
 import type { ReportType } from "@/lib/reports";
@@ -94,6 +94,7 @@ export async function uploadReports(_prev: UploadState, formData: FormData): Pro
     }
     for (const part of parts) results.push(await saveReport(restaurant.id, parts.length > 1 ? `${file.name} › ${part.name}` : part.name, part.data));
   }
+  if (results.some((r) => r.ok)) await replanAfterReportChange(restaurant.id);
   revalidatePath("/setup/reports");
   return { results };
 }
@@ -124,6 +125,22 @@ async function storeReport(restaurantId: string, fileName: string, report: Parse
     },
   });
   return { fileName, ok: true, message: `Read as ${REPORT_LABELS[report.type]}` };
+}
+
+/**
+ * After reports change, once setup is done and 4 weeks of each are in, the
+ * plan runs again by itself (grouped: see scheduleReplan). The worker picks
+ * it up; without one, this server starts it when the wait is over.
+ */
+async function replanAfterReportChange(restaurantId: string) {
+  const restaurant = await db.restaurant.findUnique({ where: { id: restaurantId }, select: { setupCompletedAt: true } });
+  if (!restaurant?.setupCompletedAt) return;
+  const uploads = await db.reportUpload.findMany({ where: { restaurantId }, select: { reportType: true, periodStart: true, periodEnd: true, fileName: true, status: true } });
+  if (completeWeeks(weeksOf("dayPart", uploads)).length < MIN_WEEKS || completeWeeks(weeksOf("wisr", uploads)).length < MIN_WEEKS) return;
+  await scheduleReplan(restaurantId);
+  after(() => {
+    setTimeout(() => kickJobs(), REPLAN_DELAY_MS + 2_000).unref?.();
+  });
 }
 
 /**
@@ -183,6 +200,7 @@ export async function uploadWeek(_prev: UploadState, formData: FormData): Promis
       results.push(await storeReport(restaurant.id, name, parsed.report));
     }
   }
+  if (results.some((r) => r.ok)) await replanAfterReportChange(restaurant.id);
   revalidatePath("/setup/reports");
   return { results };
 }
@@ -193,14 +211,16 @@ export async function removeWeek(formData: FormData) {
   const group = String(formData.get("group") ?? "") as UploadGroup;
   const end = String(formData.get("end") ?? "");
   if (!(group in GROUP_TYPES) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) return;
-  await db.reportUpload.deleteMany({ where: { restaurantId: restaurant.id, reportType: { in: GROUP_TYPES[group] }, periodEnd: new Date(end) } });
+  const { count } = await db.reportUpload.deleteMany({ where: { restaurantId: restaurant.id, reportType: { in: GROUP_TYPES[group] }, periodEnd: new Date(end) } });
+  if (count) await replanAfterReportChange(restaurant.id);
   revalidatePath("/setup/reports");
 }
 
 export async function removeReport(formData: FormData) {
   const restaurant = await requireRestaurant();
   const id = String(formData.get("id") ?? "");
-  await db.reportUpload.deleteMany({ where: { id, restaurantId: restaurant.id } });
+  const { count } = await db.reportUpload.deleteMany({ where: { id, restaurantId: restaurant.id } });
+  if (count) await replanAfterReportChange(restaurant.id);
   revalidatePath("/setup/reports");
 }
 

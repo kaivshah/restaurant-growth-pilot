@@ -109,6 +109,9 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
       </div>
 
       {saved && <Notice tone="green">Thanks. New offer ideas from these numbers will appear in the Approval Inbox.</Notice>}
+      {restaurant.setupCompletedAt && ready && (
+        <p className="text-[13px] text-muted">When you add or remove a report here, the analysis and offers are redone by themselves about a minute later.</p>
+      )}
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="flex flex-col gap-6">
           {need && !ready && (

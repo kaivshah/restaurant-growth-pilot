@@ -270,6 +270,22 @@ export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFF
   return db.draftJob.create({ data: { restaurantId, kind, force, payload } });
 }
 
+/** How long after the last report upload the fresh plan starts, so a few uploads in a row make one run. */
+export const REPLAN_DELAY_MS = 90_000;
+
+/**
+ * New or removed reports: run today's plan again (analysis, deals and
+ * catering picks) a little later. Each further upload pushes the start back,
+ * so uploading several files in a row costs one AI run, not one per file.
+ */
+export async function scheduleReplan(restaurantId: string, now = new Date()) {
+  const runAfter = new Date(now.getTime() + REPLAN_DELAY_MS);
+  const message = "New reports: the analysis and offers will be redone in a minute or two.";
+  const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind: "DAILY", status: "QUEUED" } });
+  if (waiting) return db.draftJob.update({ where: { id: waiting.id }, data: { runAfter, message } });
+  return db.draftJob.create({ data: { restaurantId, kind: "DAILY", runAfter, message } });
+}
+
 /**
  * Shows what a running job is doing: saved as the job's message (the inbox
  * and leads pages show it) and printed in the server terminal.
