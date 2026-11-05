@@ -355,15 +355,20 @@ export type PitchTarget = { leadId?: string; eventId?: string };
  * started yet, so several clicks become one batch (one AI request for many
  * pitches). Returns at once; a worker writes the pitches.
  */
-export async function enqueuePitches(restaurantId: string, targets: PitchTarget[]) {
+/** A new pitch job waits this long for more clicks, so pitches asked for one after another share one batch. */
+export const PITCH_GATHER_MS = 4_000;
+
+export async function enqueuePitches(restaurantId: string, targets: PitchTarget[], now = new Date()) {
   const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind: "PITCH", status: "QUEUED" } });
   const key = (t: PitchTarget) => `${t.leadId ?? ""}|${t.eventId ?? ""}`;
   if (waiting) {
     const merged = [...((waiting.payload as PitchTarget[] | null) ?? []), ...targets];
     const unique = [...new Map(merged.map((t) => [key(t), t])).values()];
-    return db.draftJob.update({ where: { id: waiting.id }, data: { payload: unique, runAfter: null } });
+    // Joining a gathering job keeps its start time; one waiting for a busy AI is tried now.
+    const gathering = waiting.runAfter && waiting.runAfter.getTime() - now.getTime() <= PITCH_GATHER_MS && !waiting.message;
+    return db.draftJob.update({ where: { id: waiting.id }, data: { payload: unique, runAfter: gathering ? waiting.runAfter : null } });
   }
-  return db.draftJob.create({ data: { restaurantId, kind: "PITCH", payload: targets } });
+  return db.draftJob.create({ data: { restaurantId, kind: "PITCH", payload: targets, runAfter: new Date(now.getTime() + PITCH_GATHER_MS) } });
 }
 
 /** Queue follow-up writing for approved pitches; joins a waiting batch like pitches do. */
@@ -456,7 +461,8 @@ export async function requeueStaleJobs() {
 /** What a page should show for a restaurant's latest job of one kind. */
 export function jobState(job: { status: string; runAfter: Date | null } | null, now = new Date()): "idle" | "working" | "waiting" {
   if (!job || (job.status !== "QUEUED" && job.status !== "RUNNING")) return "idle";
-  return job.status === "QUEUED" && job.runAfter && job.runAfter > now ? "waiting" : "working";
+  // A job gathering clicks for a few seconds is about to start, not waiting on the AI.
+  return job.status === "QUEUED" && job.runAfter && job.runAfter.getTime() - now.getTime() > PITCH_GATHER_MS + 1_000 ? "waiting" : "working";
 }
 
 /**

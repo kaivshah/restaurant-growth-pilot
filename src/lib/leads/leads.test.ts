@@ -328,6 +328,24 @@ describe("catering offers decided by the AI", () => {
     expect(out.offers.get("t2")?.mechanic).toBe("free_item");
     expect(out.rejected).toEqual([]);
   });
+
+  it("splits a big selection into groups of 8 per request", async () => {
+    const base = cctx({ promoApproval: "YES" });
+    const many = { ...base, targets: Array.from({ length: 11 }, (_, i) => ({ ...base.targets[0], key: `t${i + 1}` })) };
+    const sizes: number[] = [];
+    const model: AnalystModel = {
+      provider: "test",
+      model: "scripted",
+      start: ({ user }) => {
+        const keys = [...user.matchAll(/"key":"(t\d+)"/g)].map((m) => m[1]);
+        sizes.push(keys.length);
+        return { send: async () => ({ toolCalls: [{ id: "s", name: "submit_catering_offers", input: { offers: keys.map((key) => offer({ key })) } }], text: "", inputTokens: 1, outputTokens: 1 }) };
+      },
+    };
+    const out = await decideCateringOffers(model, many);
+    expect(sizes).toEqual([8, 3]);
+    expect(out.offers.size).toBe(11);
+  });
 });
 
 describe("pitch email copy", () => {

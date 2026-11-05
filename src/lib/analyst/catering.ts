@@ -187,7 +187,28 @@ export interface CateringOutcome {
  * fails the checks get one more try with the reasons. Targets still without
  * a sound offer are left out (no fixed fallback offer).
  */
+/** Most targets per AI request, so each answer stays short and fast. */
+export const CATERING_BATCH = 8;
+
 export async function decideCateringOffers(model: AnalystModel, ctx: CateringContext, limits: RunLimits = {}): Promise<CateringOutcome> {
+  if (ctx.targets.length <= CATERING_BATCH) return decideBatch(model, ctx, limits, "");
+  // Bigger selections go in groups of 8; a busy or failed group stops the rest (the job retries).
+  const out: CateringOutcome = { status: "DONE", offers: new Map(), rejected: [], toolLog: [], inputTokens: 0, outputTokens: 0, toolCalls: 0, turns: 0 };
+  for (let i = 0; i < ctx.targets.length; i += CATERING_BATCH) {
+    const part = await decideBatch(model, { ...ctx, targets: ctx.targets.slice(i, i + CATERING_BATCH) }, limits, `g${i / CATERING_BATCH + 1}_`);
+    out.inputTokens += part.inputTokens;
+    out.outputTokens += part.outputTokens;
+    out.toolCalls += part.toolCalls;
+    out.turns += part.turns;
+    out.toolLog.push(...part.toolLog);
+    for (const [k, v] of part.offers) out.offers.set(k, v);
+    out.rejected.push(...part.rejected);
+    if (part.status !== "DONE") return { ...out, status: part.status, error: part.error, busy: part.busy, fatal: part.fatal };
+  }
+  return out;
+}
+
+async function decideBatch(model: AnalystModel, ctx: CateringContext, limits: RunLimits, prefix: string): Promise<CateringOutcome> {
   const out: CateringOutcome = { status: "FAILED", offers: new Map(), rejected: [], toolLog: [], inputTokens: 0, outputTokens: 0, toolCalls: 0, turns: 0 };
   let pending = ctx.targets;
   let feedback = "";
@@ -205,7 +226,7 @@ export async function decideCateringOffers(model: AnalystModel, ctx: CateringCon
       limits: { maxTurns: 2, ...limits },
     });
     // Each try's tool calls get their own ids, so citations point at the right results.
-    const rename = (id: string) => (attempt ? `try${attempt + 1}_${id}` : id);
+    const rename = (id: string) => `${prefix}${attempt ? `try${attempt + 1}_` : ""}${id}`;
     const log = res.toolLog.map((c) => ({ ...c, id: rename(c.id) }));
     out.toolLog.push(...log);
     out.inputTokens += res.inputTokens;

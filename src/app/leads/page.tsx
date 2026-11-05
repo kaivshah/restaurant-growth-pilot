@@ -16,6 +16,7 @@ import { AiStatus } from "../inbox/ai-status";
 import { AutoRefresh } from "../inbox/auto-refresh";
 import { AppShell } from "../inbox/shell";
 import { addLeadContact, excludeLead, includeLead, queuePitches, suggestAction } from "./actions";
+import { GenerateButton, GenerateTicked } from "./generate";
 
 const LEAD_TYPES = ["office", "coworking", "school", "clinic", "gym", "venue"];
 const EVENT_TYPES = ["conference", "expo", "corporate", "community", "sports", "school", "concert", "other"];
@@ -38,7 +39,6 @@ const DAY_MS = 86_400_000;
 const dateParam = (v?: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v)) ? v : null);
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
-const primaryBtn = "min-h-11 w-full rounded-field bg-primary px-4 font-bold text-white hover:bg-primary-hover disabled:opacity-60";
 const field = "h-11 rounded-field border border-field bg-surface px-3 text-sm";
 
 export default async function LeadsPage({ searchParams }: { searchParams: Promise<Params> }) {
@@ -122,7 +122,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const scanning = jobState(scanJob) === "working";
   const suggesting = jobState(suggestJob) === "working";
   const pitching = jobState(pitchJob) === "working";
-  const recentPitchJob = pitchJob && pitchJob.finishedAt && now.getTime() - pitchJob.finishedAt.getTime() < 10 * 60_000 ? pitchJob : null;
+  const recentPitchJobs = await db.draftJob.findMany({
+    where: { restaurantId: restaurant.id, kind: "PITCH", status: { in: ["DONE", "FAILED"] }, finishedAt: { gte: new Date(now.getTime() - 10 * 60_000) } },
+    orderBy: { finishedAt: "asc" },
+    select: { status: true, message: true },
+  });
   const aiOn = Boolean(analystFromEnv("leads"));
   const webOn = Boolean(webEventsFromEnv());
   const pitchFor = (leadId: string | null, eventId: string | null) => pitches.find((p) => (eventId ? p.eventId === eventId : p.leadId === leadId && !p.eventId));
@@ -195,22 +199,26 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         </Notice>
       )}
       {pitching && pitchJob?.status === "RUNNING" && pitchJob.message && <p className="font-semibold text-ink-2">{pitchJob.message}</p>}
-      {recentPitchJob?.status === "DONE" && recentPitchJob.message && (
-        recentPitchJob.message.startsWith("Wrote 0 ") ? (
-          <Notice tone="danger" title="No pitch was written.">
-            {recentPitchJob.message.replace(/^Wrote 0 pitches; /, "")}. Try Generate pitch again; the AI gets the reason and another try.
-          </Notice>
-        ) : (
-          <Notice tone="green" title="Pitches written.">
-            {recentPitchJob.message}. <Link href="/inbox?tab=catering">Review them in the inbox</Link>.
-          </Notice>
-        )
-      )}
-      {recentPitchJob?.status === "FAILED" && (
-        <Notice tone="danger" title="Pitches weren't written.">
-          {recentPitchJob.message}
-        </Notice>
-      )}
+      {(() => {
+        // Every pitch job finished in the last 10 minutes, so a later one doesn't hide an earlier result.
+        const done = recentPitchJobs.filter((j) => j.status === "DONE" && j.message);
+        const good = done.filter((j) => !j.message!.startsWith("Wrote 0 "));
+        const bad = [...done.filter((j) => j.message!.startsWith("Wrote 0 ")), ...recentPitchJobs.filter((j) => j.status === "FAILED")];
+        return (
+          <>
+            {good.length > 0 && (
+              <Notice tone="green" title="Pitches written.">
+                {good.map((j) => j.message).join(". ")}. <Link href="/inbox?tab=catering">Review them in the inbox</Link>.
+              </Notice>
+            )}
+            {bad.length > 0 && (
+              <Notice tone="danger" title={bad.length === 1 ? "A pitch wasn't written." : "Some pitches weren't written."}>
+                {bad.map((j) => j.message!.replace(/^Wrote 0 pitches; /, "")).join(". ")}. Try Generate pitch again; the AI gets the reason and another try.
+              </Notice>
+            )}
+          </>
+        );
+      })()}
       {suggestJob?.status === "FAILED" && !suggesting && (
         <Notice tone="danger" title="Today's picks didn't finish.">
           {suggestJob.message}
@@ -397,9 +405,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">Tick several and write them together: one AI request covers up to 8 pitches.</p>
-        <button type="submit" form="bulk" className="min-h-11 rounded-field border-2 border-primary bg-surface px-4 font-bold text-primary-ink hover:bg-primary-soft">
-          Generate pitches for ticked rows
-        </button>
+        <GenerateTicked />
       </div>
 
       {view === "events" && (
@@ -614,15 +620,3 @@ function PickBox({ value, label }: { value: string; label: string }) {
   );
 }
 
-/** Submits the bulk form with just this row, so it joins any batch being written. */
-function GenerateButton({ value, writing }: { value: string; writing: boolean }) {
-  return writing ? (
-    <button type="button" disabled className={primaryBtn}>
-      Writing the pitch…
-    </button>
-  ) : (
-    <button type="submit" form="bulk" name="one" value={value} className={primaryBtn}>
-      Generate pitch
-    </button>
-  );
-}
