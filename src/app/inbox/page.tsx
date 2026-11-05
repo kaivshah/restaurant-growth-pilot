@@ -141,7 +141,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                 </Link>
               </div>
               {lastRun.status === "FAILED" ? (
-                <p className="text-ink-2">The AI analysis didn&apos;t finish ({lastRun.error}), so you&apos;re seeing the standard ideas.</p>
+                <p className="text-ink-2">The AI analysis didn&apos;t finish ({lastRun.error}). Any earlier ideas stay below; try &ldquo;Refresh ideas&rdquo; later.</p>
               ) : findings.length === 0 ? (
                 <p className="text-ink-2">Nothing stood out beyond the offers below.</p>
               ) : (

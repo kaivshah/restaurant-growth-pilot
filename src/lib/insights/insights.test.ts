@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildOffers, type OfferRules } from "@/lib/offers";
 import { parseReportFile, type ParsedReport } from "@/lib/reports";
 import { computeInsights } from "./index";
 
@@ -27,14 +26,6 @@ const SAMPLE_FILES = [
   "DailyCashBreadOverShort_00000_3-10-2026.csv",
 ];
 
-const rules = (over: Partial<OfferRules> = {}): OfferRules => ({
-  promoApproval: "UNSURE",
-  maxDiscountPct: 15,
-  allowFreeExtra: true,
-  allowPercentOff: true,
-  ...over,
-});
-
 describe("insights from sample reports", () => {
   it("computes the headline numbers", async () => {
     const ins = computeInsights(await loadAll(SAMPLE, SAMPLE_FILES));
@@ -48,25 +39,6 @@ describe("insights from sample reports", () => {
     expect(ins.overuse[0]).toEqual({ category: "VEGGIES", dollars: 80 });
     expect(ins.unitCosts["chips"]).toBe(0.7);
     expect(ins.bread?.weekendSurplus).toBe(170); // Sat 20 + Sun 100 + Mon 50
-  });
-
-  it("builds offers that respect the discount limit", async () => {
-    const ins = computeInsights(await loadAll(SAMPLE, SAMPLE_FILES));
-    // A $2.67 drink is 21% of a $12.50 ticket: too much at 15%, so it becomes a $1 drink (13%).
-    const capped = buildOffers(ins, rules({ maxDiscountPct: 15 }));
-    expect(capped.find((o) => o.key === "afternoon-drink")?.title).toBe("$1 fountain drink with any footlong, 3–5 pm");
-    // At 25% the free drink fits.
-    const generous = buildOffers(ins, rules({ maxDiscountPct: 25 }));
-    expect(generous.find((o) => o.key === "afternoon-drink")?.title).toBe("Free fountain drink with any footlong, 3–5 pm");
-    // At 10% neither fits, so there is no drink offer at all.
-    expect(buildOffers(ins, rules({ maxDiscountPct: 10 })).some((o) => o.key === "afternoon-drink")).toBe(false);
-  });
-
-  it("adds a brand check in brand-safe mode and skips giveaways when they're not allowed", async () => {
-    const ins = computeInsights(await loadAll(SAMPLE, SAMPLE_FILES));
-    expect(buildOffers(ins, rules()).every((o) => o.checks.includes("Check with your brand before sending"))).toBe(true);
-    expect(buildOffers(ins, rules({ promoApproval: "YES" })).some((o) => o.checks.includes("Check with your brand before sending"))).toBe(false);
-    expect(buildOffers(ins, rules({ allowFreeExtra: false }))).toEqual([]);
   });
 });
 
@@ -93,10 +65,6 @@ describe.runIf(PRIVATE_FILES.every((f) => existsSync(join(PRIVATE, f))))("insigh
     expect(ins.overuse.map((o) => o.category)).toEqual(["VEGGIES", "TOPPINGS", "CHEESE"]);
     expect(ins.days?.busiest).toEqual({ day: "Wed", sales: 1282.43 });
 
-    const offers = buildOffers(ins, rules());
-    expect(offers.map((o) => o.key)).toEqual(["welcome", "afternoon-drink", "weekend-bread"]);
-    // $2.50 is 18% of a $13.60 ticket, over the 15% limit, so it's a $1 drink.
-    expect(offers[1].title).toBe("$1 fountain drink with any footlong, 3–5 pm");
   });
 });
 

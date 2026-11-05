@@ -65,14 +65,14 @@ export async function runAnalysis(
 ): Promise<AnalysisOutcome> {
   const res = await runToolLoop(model, {
     system: ANALYST_SYSTEM,
-    user: analystRequest(ctx, baseline),
+    user: analystRequest(ctx),
     ctx,
     tools: DATA_TOOLS,
     // The usual first lookups, sent with the request so most runs need one AI request.
     prefetch: prefetchFor(ctx),
     submit: {
       name: "submit_analysis",
-      description: "Submit your findings, offer proposals and decisions on the standard ideas. Call once, at the end.",
+      description: "Submit your findings and offer proposals. Call once, at the end.",
       jsonSchema: SUBMIT_SCHEMA,
       schema: Submission,
     },
@@ -112,13 +112,7 @@ function verifySubmission(
   }
 
   const taken = [...existingTitles];
-  // Standard ideas the AI keeps still use up their item: no second free cookie next to the welcome cookie.
-  const replacedOrDropped = new Set([
-    ...sub.proposals.map((p) => p.baseline_key).filter(Boolean),
-    ...sub.baseline_decisions.filter((d) => d.action !== "keep").map((d) => d.key),
-  ]);
   const items = new Map<string, string>();
-  for (const b of baseline) if (b.item && !replacedOrDropped.has(b.key)) items.set(itemKey(b.item), b.title);
   const targets = new Map<string, string>();
   for (const p of sub.proposals.slice(0, MAX_PROPOSALS)) {
     const problems = checkProposal(p, ctx, log);

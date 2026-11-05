@@ -19,7 +19,7 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /**
  * The analyst chosen by ANALYST_PROVIDER (Claude by default), or null when
- * it's off or its key is missing (rule ideas only). The purpose only matters
+ * it's off or its key is missing (then no offer ideas are made). The purpose only matters
  * for the scripted fake.
  */
 export function analystFromEnv(purpose: "offers" | "leads" = "offers", env: NodeJS.ProcessEnv = process.env): AnalystModel | null {
@@ -59,7 +59,8 @@ export function estimateCostUsd(model: string, inputTokens: number, outputTokens
 }
 
 /**
- * Standard ideas plus the analyst's: the AI can drop or replace a standard
+ * Merges any fixed ideas with the analyst's. Offers now come only from the
+ * analyst (baseline is empty), so this returns its ideas; with a baseline, the AI can drop or replace a standard
  * idea, and anything too close to an AI idea is left out.
  */
 export function mergeIdeas(baseline: OfferCandidate[], aiOffers: OfferCandidate[], outcome: Pick<AnalysisOutcome, "baselineDecisions" | "proposals">): OfferCandidate[] {

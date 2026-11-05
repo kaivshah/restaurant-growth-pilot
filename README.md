@@ -167,7 +167,7 @@ Turn it on with `ANALYST_PROVIDER` and the AI takes part in **deciding** what to
 | `ANALYST_PROVIDER=ollama` | Free and local. Needs a model with tool calling (e.g. `qwen2.5:7b-instruct`); small models are less reliable, and the checks will block more of their ideas |
 | `ANALYST_PROVIDER=fake` | Development only: a scripted analyst for trying the flow without a model |
 
-Each run is stored in `AnalysisRun`: findings, accepted and rejected ideas, the decisions on standard ideas, every tool call, tokens and estimated cost.
+Each run is stored in `AnalysisRun`: findings, accepted and rejected ideas, every tool call, tokens and estimated cost.
 
 ### Milestone 2: offer ideas in the Approval Inbox
 

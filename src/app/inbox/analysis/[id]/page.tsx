@@ -170,12 +170,10 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
             </ul>
           )}
         </Card>
-      ) : (
+      ) : decisions.length > 0 ? (
       <Card className="flex flex-col gap-4 p-6">
         <h2 className="text-lg font-bold">What it decided about the standard ideas</h2>
-        {decisions.length === 0 ? (
-          <p className="text-ink-2">It didn&apos;t comment on them, so they were all kept.</p>
-        ) : (
+        {/* Only analyses from before every offer was the AI's own have these. */}
           <ul className="flex flex-col gap-3">
             {decisions.map((d) => (
               <li key={d.key} className="flex flex-wrap items-start gap-3 border-t border-sand pt-3">
@@ -189,9 +187,8 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
               </li>
             ))}
           </ul>
-        )}
       </Card>
-      )}
+      ) : null}
 
       <Card className="flex flex-col gap-3 p-6">
         <h2 className="text-lg font-bold">Data it looked at</h2>

@@ -71,7 +71,7 @@ export function slug(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 }
 
-/** Turns a verified AI proposal into an inbox offer, the same shape the rule ideas use. */
+/** Turns a verified AI proposal into an inbox offer. */
 export function proposalToOffer(p: Proposal, ctx: AnalystContext, log: ToolLog): OfferCandidate {
   const est = p.mechanic === "catering_promo" ? null : estimateOfferCost(ctx, { mechanic: p.mechanic, value_usd: p.value_usd, percent_off: p.percent_off });
   const needsCode = p.audience !== "in_store_qr" && p.audience !== "catering_leads";

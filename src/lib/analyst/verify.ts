@@ -82,6 +82,8 @@ function openWindow(ctx: AnalystContext): { first: number; last: number } | null
   return open.length ? { first: Math.min(...open), last: Math.max(...open) + 1 } : null;
 }
 
+const REPORT_WORDS = /report|day ?part|wisr|sales summary|units summary|inventory|bread|cash in week|cost of goods|discount/i;
+
 export function checkProposal(p: Proposal, ctx: AnalystContext, log: ToolLog): string[] {
   const problems: string[] = [...checkEvidence(p.evidence, log)];
   const extra = [p.value_usd, p.percent_off, p.duration_weeks, p.start_hour, p.end_hour, ctx.rules.maxDiscountPct].filter(
@@ -110,6 +112,8 @@ export function checkProposal(p: Proposal, ctx: AnalystContext, log: ToolLog): s
     }
   }
 
+  // The rationale is for the owner: it must say which of their reports it comes from.
+  if (!REPORT_WORDS.test(p.why)) problems.push("The reason doesn't say which report it comes from.");
   if (p.end_hour <= p.start_hour) problems.push("The offer ends before it starts.");
   const window = openWindow(ctx);
   if (window && (p.start_hour < window.first || p.end_hour > window.last)) {

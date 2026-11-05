@@ -3,9 +3,8 @@ import type { DraftJob, JobKind, Prisma, Restaurant } from "@prisma/client";
 import { analystFromEnv, buildContext, estimateCostUsd, mergeIdeas, proposalToOffer, runAnalysis } from "@/lib/analyst";
 import type { AnalysisOutcome, AnalystContext } from "@/lib/analyst";
 import { db } from "@/lib/db";
-import { computeInsights } from "@/lib/insights";
 import { AiBusyError, AiConfigError, type FactsPacket, type CallLog, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
-import { type OfferCandidate, buildOffers, isBrandSafe } from "@/lib/offers";
+import { type OfferCandidate, isBrandSafe } from "@/lib/offers";
 import type { ParsedReport } from "@/lib/reports";
 
 /** Most new drafts one restaurant can get per day, to keep AI costs predictable. */
@@ -44,20 +43,21 @@ export async function usableReports(restaurantId: string) {
   return { rows, reports: rows.map((r) => r.data as unknown as ParsedReport), anyConfirmed: rows.some((r) => r.status === "CONFIRMED") };
 }
 
-type IdeaResult = { offers: OfferCandidate[]; analysisRunId: string | null; note: string };
+/** failed: no fresh analysis, so the ideas already in the inbox stay. */
+type IdeaResult = { offers: OfferCandidate[]; analysisRunId: string | null; note: string; failed?: boolean };
 
 /**
- * Standard rule ideas, plus the AI analyst's when ANALYST_PROVIDER is set.
+ * The AI analyst's offer ideas, each built from the uploaded reports.
  * A run is reused while the reports, rules and past decisions are unchanged,
  * so refreshing doesn't pay for the same analysis twice.
  */
-const ANALYST_VERSION = 3;
+const ANALYST_VERSION = 4;
 
 async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof usableReports>>["rows"]): Promise<IdeaResult> {
-  const reports = rows.map((r) => r.data as unknown as ParsedReport);
-  const baseline = buildOffers(computeInsights(reports), restaurant);
+  // Every offer comes from the AI analyst's study of the reports: no fixed ideas.
+  const baseline: OfferCandidate[] = [];
   const analyst = analystFromEnv();
-  if (!analyst) return { offers: baseline, analysisRunId: null, note: "standard ideas only" };
+  if (!analyst) return { offers: [], analysisRunId: null, note: "the AI analyst isn't set up (ANALYST_PROVIDER and its key)", failed: true };
 
   const decisions = await db.draft.findMany({
     where: { restaurantId: restaurant.id, kind: "CUSTOMER_OFFER", status: { in: ["APPROVED", "SKIPPED"] } },
@@ -135,7 +135,7 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
   });
   await logAnalysisCall(restaurant.id, analyst, outcome, started, "analysis");
   if (outcome.status !== "DONE") {
-    return { offers: baseline, analysisRunId: run.id, note: `analysis failed (${outcome.error}); used standard ideas` };
+    return { offers: [], analysisRunId: run.id, note: `analysis failed (${outcome.error}); the ideas already in the inbox stay`, failed: true };
   }
   return {
     offers: mergeIdeas(baseline, aiOffers, outcome),
@@ -192,7 +192,7 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
 
   const provider = providerFromEnv();
   if (!provider) return `AI not set up. ${missingAiReason()}`;
-  const { offers, analysisRunId, note } = await ideasFor(restaurant, rows);
+  const { offers, analysisRunId, note, failed: analysisFailed } = await ideasFor(restaurant, rows);
   let created = 0;
   let reused = 0;
   const failed: string[] = [];
@@ -248,9 +248,12 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
     });
     created++;
   }
-  // Standard ideas the analyst dropped leave the inbox if they were still waiting.
+  // After a fresh analysis, waiting ideas it no longer proposes leave the inbox
+  // (including the fixed rule ideas of earlier versions).
   const keys = offers.map((o) => o.key);
-  const removed = await db.draft.deleteMany({ where: { restaurantId, kind: "CUSTOMER_OFFER", status: "PENDING", offerKey: { notIn: keys } } });
+  const removed = analysisFailed
+    ? { count: 0 }
+    : await db.draft.deleteMany({ where: { restaurantId, kind: "CUSTOMER_OFFER", status: "PENDING", offerKey: { notIn: keys } } });
   return `Created ${created}, unchanged ${reused}${removed.count ? `, removed ${removed.count}` : ""}${failed.length ? `, ${failed.length} not written (${failed.join("; ")})` : ""}; ${note}.`;
 }
 

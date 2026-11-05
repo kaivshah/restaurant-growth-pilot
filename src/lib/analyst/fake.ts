@@ -61,7 +61,7 @@ export function fakeAnalyst(): AnalystModel {
                   end_hour: 21,
                   duration_weeks: 3,
                   audience: "email_and_qr",
-                  why: `Late evening is only ${parts[lateIdx].share_pct}% of sales and only ${drinkPct}% of orders include a drink, so a small free extra can lift evening visits.`,
+                  why: `Your Day Part report shows late evening is only ${parts[lateIdx].share_pct}% of sales and only ${drinkPct}% of orders include a drink, so a small free extra can lift evening visits.`,
                   expected_effect: "More footlong orders between 7 and 9 pm on weeknights; compare redemptions with the same hours now.",
                   confidence: "medium",
                   evidence: [
