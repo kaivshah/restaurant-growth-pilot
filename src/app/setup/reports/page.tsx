@@ -1,9 +1,9 @@
 import { Card, CheckIcon, Notice, Pill } from "@/components/ui";
 import { db } from "@/lib/db";
-import { MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, type WeekRow, completeWeeks, summarise, weeksOf } from "@/lib/reports";
+import { GROUP_TYPES, MAX_EXTRA_FILES, MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, type WeekRow, completeWeeks, summarise, weeksOf } from "@/lib/reports";
 import type { ParsedReport } from "@/lib/reports";
 import { requireRestaurant } from "@/lib/restaurant";
-import { confirmNumbers, removeWeek } from "../actions";
+import { confirmNumbers, removeReport, removeWeek } from "../actions";
 import { ConfirmList } from "./confirm-list";
 import { MoreWeeks, WeekUpload } from "./week-upload";
 
@@ -27,7 +27,7 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
   // Each section's weeks, oldest first. Four complete weeks of each are needed; up to eight are kept.
   const dayWeeks = weeksOf("dayPart", uploads);
   const wisrWeeks = weeksOf("wisr", uploads);
-  const otherWeeks = weeksOf("other", uploads);
+  const optional = uploads.filter((u) => (GROUP_TYPES.other as string[]).includes(u.reportType));
   const dayDone = completeWeeks(dayWeeks).length;
   const wisrDone = completeWeeks(wisrWeeks).length;
   const ready = dayDone >= MIN_WEEKS && wisrDone >= MIN_WEEKS;
@@ -118,7 +118,43 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
           )}
           {section("dayPart", "1. Day Part Sales", "Day Part / Hourly Sales & Units: one CSV per week. Sales by hour and day, for your slow and busy times.", dayWeeks, true)}
           {section("wisr", "2. WISR", "The weekly WISR export as it downloads (a zip with six reports): sales mix, customers, discounts, costs.", wisrWeeks, true)}
-          {section("other", "Cash In Week", "Daily net sales. Not needed: Day Part and WISR cover it.", otherWeeks, false)}
+          <Card className="overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-5">
+              <div>
+                <h2 className="text-lg font-bold">3. Other reports</h2>
+                <p className="text-[13px] text-muted">
+                  Cash In Week (daily sales by date), or any other back-office export as CSV or Excel, such as item or promotion sales. The AI reads them too. Files with names, contact or pay details are refused.
+                </p>
+              </div>
+              <Pill>{optional.length ? `${optional.length} of ${MAX_EXTRA_FILES} added` : "Optional"}</Pill>
+            </div>
+            <ul>
+              {optional.map((u) => {
+                const r = u.data as unknown as ParsedReport;
+                const what = r.type === "extraTable" ? `${r.title} · ${r.rowCount} rows, ${r.columns.length} columns` : `${REPORT_LABELS[r.type]}${r.period ? ` · ${weekLabel(new Date(r.period.start), new Date(r.period.end))}` : ""}`;
+                return (
+                  <li key={u.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 border-t border-sand px-6 py-3.5">
+                    <CheckIcon />
+                    <div className="min-w-0">
+                      <p className="font-semibold break-words">{what}</p>
+                      <p className="text-[13px] break-words text-muted">{u.fileName}</p>
+                    </div>
+                    <form action={removeReport}>
+                      <input type="hidden" name="id" value={u.id} />
+                      <button type="submit" className="min-h-11 rounded-field px-3 text-sm font-semibold text-muted hover:text-danger" aria-label={`Remove ${u.fileName}`}>
+                        Remove
+                      </button>
+                    </form>
+                  </li>
+                );
+              })}
+              {optional.length < MAX_EXTRA_FILES ? (
+                <WeekUpload key={`other-${optional.length}`} group="other" label={optional.length ? "Add another file" : "Upload a file"} optional />
+              ) : (
+                <li className="border-t border-sand px-6 py-3 text-[13px] text-muted">That&apos;s the most: {MAX_EXTRA_FILES} optional files. Remove one to add a different file.</li>
+              )}
+            </ul>
+          </Card>
           <p className="text-[13px] text-muted">
             Upload weeks in any order; they&apos;re sorted by date. The AI uses weekly averages of all the weeks you add ({MIN_WEEKS} needed, up to {MAX_WEEKS}), so one unusual week doesn&apos;t skew the
             deals. More weeks means more for the AI to read, so {MAX_WEEKS} is the most.

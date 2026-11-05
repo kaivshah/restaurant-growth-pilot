@@ -77,9 +77,27 @@ describe("sample reports", () => {
   it("explains PDFs and unknown files", async () => {
     const pdf = await parseReportFile("Sept.pdf", new ArrayBuffer(4));
     expect(pdf.ok).toBe(false);
-    const unknown = await parseReportFile("notes.csv", new TextEncoder().encode("a,b\n1,2").buffer);
+    const unknown = await parseReportFile("notes.csv", new TextEncoder().encode("just some text\nno table here").buffer);
     expect(unknown.ok).toBe(false);
     if (!unknown.ok) expect(unknown.reason).toBe("unrecognised");
+  });
+
+  it("keeps any other export as a small table, with dates and column totals", async () => {
+    const csv = "Promo Item Sales Report\nItem,Date,Qty,Sales\nCookies,10/01/2026,120,90.50\nChips,10/07/2026,80,\"1,040.00\"\n";
+    const r = await parseReportFile("PromoItems.csv", new TextEncoder().encode(csv).buffer);
+    expect(r.ok).toBe(true);
+    if (!r.ok || r.report.type !== "extraTable") throw new Error("not an extra table");
+    expect(r.report).toMatchObject({ title: "Promo Item Sales Report", columns: ["Item", "Date", "Qty", "Sales"], rowCount: 2, totals: { Qty: 200, Sales: 1130.5 } });
+    expect(r.report.period).toEqual({ start: "2026-10-01", end: "2026-10-07" });
+    expect(r.report.rows[0]).toEqual(["Cookies", "10/01/2026", 120, 90.5]);
+  });
+
+  it("refuses other files with names, contact or pay details", async () => {
+    for (const csv of ["Report\nEmployee,Hours\nA,8\n", "Customers\nVisits,Contact\n3,someone@example.com\n", "Weekly\nPay Rate,Hours\n17,8\n"]) {
+      const r = await parseReportFile("x.csv", new TextEncoder().encode(csv).buffer);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toBe("rejected");
+    }
   });
 
   it("summarises one week for the owner to confirm", async () => {

@@ -123,3 +123,20 @@ describe("several weeks of reports", () => {
     expect(many.hourly?.lunchShare).toBe(one.hourly?.lunchShare); // same pattern every week
   });
 });
+
+describe("averaging lists that change week to week", () => {
+  it("matches inventory items by name instead of giving up on the average", async () => {
+    const { averagedReport } = await import("./index");
+    const week = (end: string, items: [string, number][]) =>
+      ({
+        type: "wisrInventoryItems",
+        storeNumber: null,
+        period: { start: end, end },
+        items: items.map(([item, used]) => ({ item, isSubtotal: false, open: null, delivered: null, left: null, used, posDiff: null, unitCost: 0.4, usedDollars: used * 0.4, diffDollars: null, actualPct: null, expectedPct: null, pctDiff: null })),
+      }) as ParsedReport;
+    const avg = averagedReport([week("2026-10-07", [["COOKIES", 100], ["CHIPS", 50]]), week("2026-10-14", [["CHIPS", 70], ["COOKIES", 120], ["BROWNIE", 10]])], "wisrInventoryItems");
+    if (!avg || avg.type !== "wisrInventoryItems") throw new Error("no average");
+    const used = Object.fromEntries(avg.items.map((i) => [i.item, i.used]));
+    expect(used).toEqual({ COOKIES: 110, CHIPS: 60, BROWNIE: 10 });
+  });
+});

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ParsedReport } from "@/lib/reports";
+import type { ExtraTableReport, ParsedReport } from "@/lib/reports";
 import { REPORT_LABELS } from "@/lib/reports";
 import { type AnalystContext, pick, sourceLabel, weeksOf } from "./context";
 
@@ -41,13 +41,16 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     parse: () => ({}),
     run: (ctx) => ({
-      reports: ctx.reports.map(({ report, status }) => ({
-        type: report.type,
-        label: REPORT_LABELS[report.type],
-        week_start: report.period?.start ?? null,
-        week_end: report.period?.end ?? null,
-        confirmed_by_owner: status === "CONFIRMED",
-      })),
+      reports: ctx.reports
+        .filter(({ report }) => report.type !== "extraTable")
+        .map(({ report, status }) => ({
+          type: report.type,
+          label: REPORT_LABELS[report.type],
+          week_start: report.period?.start ?? null,
+          week_end: report.period?.end ?? null,
+          confirmed_by_owner: status === "CONFIRMED",
+        })),
+      other_reports: extrasOf(ctx).map((e, i) => ({ number: i + 1, title: e.title, columns: e.columns, rows: e.rowCount, period: e.period })),
     }),
   }),
 
@@ -59,8 +62,9 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
     parse: (i) => weekArg.parse(i ?? {}),
     run: (ctx, { week }) => {
       const sales = pick(ctx, "wisrSales", week);
-      const units = pick(ctx, "wisrUnits", week ?? sales?.period?.end);
-      const cogs = pick(ctx, "wisrAdjCogs", week ?? sales?.period?.end);
+      // The same weeks for all three: one week if asked, else the average of each.
+      const units = pick(ctx, "wisrUnits", week);
+      const cogs = pick(ctx, "wisrAdjCogs", week);
       if (!sales && !units) return noData("WISR sales or units report");
       return {
         source: [sales, units, cogs].filter(Boolean).map((r) => sourceLabel(r as ParsedReport)),
@@ -173,6 +177,36 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     parse: () => ({}),
     run: (ctx) => salesMix(ctx),
+  }),
+
+  tool({
+    name: "get_daily_sales",
+    description:
+      "Net sales for each date across all uploaded Cash In Week reports, with the weekday, the average per weekday, and the best and worst dates. Use it to spot one-off days (holidays, local events) and weekday patterns.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parse: () => ({}),
+    run: (ctx) => dailySales(ctx),
+  }),
+
+  tool({
+    name: "get_other_report",
+    description:
+      "One of the owner's other uploaded reports (not WISR or day-part), by its number from list_reports: its columns, the column totals and the first rows. Read it only if its title suggests it matters for offers.",
+    inputSchema: { type: "object", properties: { number: { type: "integer", minimum: 1 } }, required: ["number"], additionalProperties: false },
+    parse: (i) => z.object({ number: z.number().int().min(1) }).parse(i),
+    run: (ctx, { number }) => {
+      const extra = extrasOf(ctx)[number - 1];
+      if (!extra) return { error: `There is no other report number ${number}.`, other_reports: extrasOf(ctx).length };
+      return {
+        source: `${extra.title} (${extra.fileName})`,
+        title: extra.title,
+        period: extra.period,
+        columns: extra.columns,
+        row_count: extra.rowCount,
+        column_totals: extra.totals,
+        rows: extra.rows.slice(0, 25),
+      };
+    },
   }),
 
   tool({
@@ -372,6 +406,33 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
     run: (ctx, args) => estimateOfferCost(ctx, args),
   }),
 ];
+
+export function extrasOf(ctx: AnalystContext): ExtraTableReport[] {
+  return ctx.reports.map((r) => r.report).filter((r): r is ExtraTableReport => r.type === "extraTable");
+}
+
+const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function dailySales(ctx: AnalystContext) {
+  const byDate = new Map<string, number>();
+  for (const r of ctx.reports.map((x) => x.report)) if (r.type === "cashInWeek") for (const d of r.days) byDate.set(d.date, d.netSales);
+  if (!byDate.size) return noData("Cash In Week report");
+  const days = [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, sales]) => ({ date, weekday: WEEKDAY[new Date(`${date}T12:00:00Z`).getUTCDay()], net_sales: r2(sales) }));
+  const avg = (xs: number[]) => (xs.length ? r2(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
+  const by_weekday = WEEKDAY.map((w) => ({ weekday: w, average_sales: avg(days.filter((d) => d.weekday === w).map((d) => d.net_sales)), dates: days.filter((d) => d.weekday === w).length })).filter((w) => w.dates);
+  const sorted = [...days].sort((a, b) => b.net_sales - a.net_sales);
+  return {
+    source: `Cash In Week reports, ${days[0].date} to ${days.at(-1)!.date}`,
+    dates: days.length,
+    average_per_day: avg(days.map((d) => d.net_sales)),
+    by_weekday,
+    best_dates: sorted.slice(0, 3),
+    worst_dates: sorted.slice(-3).reverse(),
+    days: days.slice(-56),
+  };
+}
 
 const TREND_LIMIT = 8;
 

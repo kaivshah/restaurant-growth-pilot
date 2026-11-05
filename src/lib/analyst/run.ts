@@ -32,6 +32,27 @@ export interface AnalysisOutcome {
 }
 
 /**
+ * The lookups sent with the first request, so most runs need one AI request:
+ * everything the uploaded reports can answer, and nothing they can't.
+ */
+export function prefetchFor(ctx: AnalystContext): { name: string }[] {
+  const has = (t: string) => ctx.reports.some((r) => r.report.type === t);
+  return [
+    { name: "list_reports" },
+    { name: "get_rules" },
+    { name: "get_week_summary" },
+    ...(has("dayPart") ? [{ name: "get_hourly_sales" }, { name: "get_day_totals" }] : []),
+    { name: "get_weekly_trend" },
+    ...(has("wisrUnits") || has("wisrInventoryItems") ? [{ name: "get_sales_mix" }] : []),
+    ...(has("wisrAdjCogs") ? [{ name: "get_discount_breakdown" }] : []),
+    ...(has("wisrInventoryCategories") || has("wisrInventoryItems") ? [{ name: "get_inventory_usage" }] : []),
+    ...(has("wisrBreadOverShort") ? [{ name: "get_bread_over_short" }] : []),
+    ...(has("cashInWeek") ? [{ name: "get_daily_sales" }] : []),
+    { name: "get_past_decisions" },
+  ];
+}
+
+/**
  * Lets the AI explore the store's data with read-only tools, then checks
  * everything it submits. Only verified findings and proposals come back.
  */
@@ -48,17 +69,7 @@ export async function runAnalysis(
     ctx,
     tools: DATA_TOOLS,
     // The usual first lookups, sent with the request so most runs need one AI request.
-    prefetch: [
-      { name: "list_reports" },
-      { name: "get_rules" },
-      { name: "get_week_summary" },
-      { name: "get_hourly_sales" },
-      { name: "get_day_totals" },
-      { name: "get_weekly_trend" },
-      { name: "get_sales_mix" },
-      { name: "get_discount_breakdown" },
-      { name: "get_past_decisions" },
-    ],
+    prefetch: prefetchFor(ctx),
     submit: {
       name: "submit_analysis",
       description: "Submit your findings, offer proposals and decisions on the standard ideas. Call once, at the end.",

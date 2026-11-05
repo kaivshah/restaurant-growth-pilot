@@ -14,13 +14,16 @@ export type UploadGroup = "dayPart" | "wisr" | "other";
 export const GROUP_TYPES: Record<UploadGroup, ReportType[]> = {
   dayPart: ["dayPart"],
   wisr: ["wisrSales", "wisrUnits", "wisrAdjCogs", "wisrInventoryItems", "wisrInventoryCategories", "wisrBreadOverShort"],
-  other: ["cashInWeek"],
+  other: ["cashInWeek", "extraTable"],
 };
+
+/** Most optional files (Cash In Week weeks and other exports) kept, for the same reason. */
+export const MAX_EXTRA_FILES = 8;
 
 /** The WISR reports a week needs before it counts. */
 export const WISR_REQUIRED: ReportType[] = ["wisrSales", "wisrUnits", "wisrAdjCogs"];
 
-export const GROUP_NAMES: Record<UploadGroup, string> = { dayPart: "Day Part Sales", wisr: "WISR", other: "Cash In Week" };
+export const GROUP_NAMES: Record<UploadGroup, string> = { dayPart: "Day Part Sales", wisr: "WISR", other: "Other reports" };
 
 export function groupOf(type: ReportType): UploadGroup {
   return (Object.keys(GROUP_TYPES) as UploadGroup[]).find((g) => GROUP_TYPES[g].includes(type)) ?? "other";

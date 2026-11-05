@@ -6,7 +6,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { enqueueDraftJob, kickJobs } from "@/lib/drafts";
-import { GROUP_NAMES, GROUP_TYPES, MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, completeWeeks, expandUpload, groupOf, parseReportFile, weeksOf } from "@/lib/reports";
+import { GROUP_NAMES, GROUP_TYPES, MAX_EXTRA_FILES, MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, completeWeeks, expandUpload, groupOf, parseReportFile, weeksOf } from "@/lib/reports";
 import type { ParsedReport } from "@/lib/reports";
 import type { ReportType } from "@/lib/reports";
 import { getRestaurant, requireRestaurant, requireUserId } from "@/lib/restaurant";
@@ -108,8 +108,9 @@ async function saveReport(restaurantId: string, fileName: string, data: ArrayBuf
 async function storeReport(restaurantId: string, fileName: string, report: ParsedReport): Promise<UploadResult> {
   const periodStart = report.period ? new Date(report.period.start) : null;
   const periodEnd = report.period ? new Date(report.period.end) : null;
+  // A new copy replaces the old one: the same week of a report, or the same other file.
   await db.reportUpload.deleteMany({
-    where: { restaurantId, reportType: report.type, periodEnd },
+    where: report.type === "extraTable" ? { restaurantId, reportType: report.type, fileName } : { restaurantId, reportType: report.type, periodEnd },
   });
   await db.reportUpload.create({
     data: {
@@ -158,13 +159,24 @@ export async function uploadWeek(_prev: UploadState, formData: FormData): Promis
         continue;
       }
       const type = parsed.report.type;
+      if (type === "extraTable") {
+        // Any other export is optional, wherever it was uploaded (e.g. an extra file inside a WISR zip).
+        const count = await db.reportUpload.count({ where: { restaurantId: restaurant.id, reportType: { in: GROUP_TYPES.other }, NOT: { fileName: name } } });
+        if (count >= MAX_EXTRA_FILES) {
+          results.push({ fileName: name, ok: false, message: `You already have ${MAX_EXTRA_FILES} optional files. Remove one before adding another.` });
+          continue;
+        }
+        results.push(await storeReport(restaurant.id, name, parsed.report));
+        continue;
+      }
       if (groupOf(type) !== group) {
         results.push({ fileName: name, ok: false, message: `This is a ${REPORT_LABELS[type]} file. Upload it under ${GROUP_NAMES[groupOf(type)]}.` });
         continue;
       }
       const week = parsed.report.period?.end ?? null;
-      if (week && !weeks.has(week) && weeks.size >= MAX_WEEKS) {
-        results.push({ fileName: name, ok: false, message: `You already have ${MAX_WEEKS} weeks of ${GROUP_NAMES[group]}. Remove one before adding another.` });
+      const cap = group === "other" ? MAX_EXTRA_FILES : MAX_WEEKS;
+      if (week && !weeks.has(week) && weeks.size >= cap) {
+        results.push({ fileName: name, ok: false, message: `You already have ${cap} weeks of ${GROUP_NAMES[group]}. Remove one before adding another.` });
         continue;
       }
       if (week) weeks.add(week);

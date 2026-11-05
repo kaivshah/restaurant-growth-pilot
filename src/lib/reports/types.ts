@@ -11,7 +11,8 @@ export type ReportType =
   | "wisrInventoryCategories"
   | "wisrInventoryItems"
   | "wisrBreadOverShort"
-  | "cashInWeek";
+  | "cashInWeek"
+  | "extraTable";
 
 /** Files we recognise but refuse, because they hold private data we never need. */
 export type RejectedType = "laborByEmployee" | "bankStatement";
@@ -180,6 +181,25 @@ export interface CashInWeekReport {
   days: CashInWeekDay[];
 }
 
+/**
+ * Any other back-office export (CSV or Excel) the owner adds: kept as a small
+ * table so the AI can look at it. Files with personal details are refused.
+ */
+export interface ExtraTableReport {
+  type: "extraTable";
+  storeNumber: null;
+  period: Period | null;
+  /** The report's own title (first cell), or the file name */
+  title: string;
+  fileName: string;
+  columns: string[];
+  rowCount: number;
+  /** The first rows, numbers parsed */
+  rows: (string | number | null)[][];
+  /** Sum of each numeric column */
+  totals: Record<string, number>;
+}
+
 export type ParsedReport =
   | DayPartReport
   | WisrSalesReport
@@ -188,7 +208,8 @@ export type ParsedReport =
   | WisrInventoryCategoriesReport
   | WisrInventoryItemsReport
   | WisrBreadOverShortReport
-  | CashInWeekReport;
+  | CashInWeekReport
+  | ExtraTableReport;
 
 export type ParseResult =
   | { ok: true; report: ParsedReport }

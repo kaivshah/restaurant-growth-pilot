@@ -51,7 +51,7 @@ type IdeaResult = { offers: OfferCandidate[]; analysisRunId: string | null; note
  * A run is reused while the reports, rules and past decisions are unchanged,
  * so refreshing doesn't pay for the same analysis twice.
  */
-const ANALYST_VERSION = 2;
+const ANALYST_VERSION = 3;
 
 async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof usableReports>>["rows"]): Promise<IdeaResult> {
   const reports = rows.map((r) => r.data as unknown as ParsedReport);

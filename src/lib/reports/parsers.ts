@@ -11,6 +11,7 @@ import {
 import type {
   CashInWeekReport,
   CategoryLine,
+  ExtraTableReport,
   DayPartCell,
   DayPartHour,
   DayPartReport,
@@ -292,5 +293,49 @@ export function parseCashInWeek(grid: Grid): CashInWeekReport {
     storeNumber: null,
     period: sorted.length ? { start: sorted[0], end: sorted[sorted.length - 1] } : null,
     days,
+  };
+}
+
+/** Column names and cells that mean a file holds personal details we never need. */
+const PRIVATE_HEADER = /\b(names?|first|last|e-?mail|phone|mobile|address|street|zip|ssn|social security|dob|birth|wages?|salary|pay ?rate|payroll|employee|clerk|staff|tips?|bank|account|routing|card number)\b/i;
+const PRIVATE_CELL = /[\w.+-]+@[\w-]+\.[\w.]+|\b\d{3}-\d{2}-\d{4}\b|\(\d{3}\)\s?\d{3}-\d{4}/;
+
+export const EXTRA_LIMITS = { rows: 40, columns: 12 };
+
+/**
+ * A report we don't know, read as a plain table: the header row is the first
+ * row of labels followed by a row with a number in it. Only the first rows and
+ * the column totals are kept. Throws "private" for files with personal details.
+ */
+export function parseExtraTable(grid: Grid, fileName: string): ExtraTableReport | "private" | null {
+  const rows = grid.map((r) => r.map((c) => (c ?? "").trim()));
+  const hasNumber = (r: string[]) => r.some((c) => num(c) !== null);
+  const headerIdx = rows.findIndex((r, i) => r.filter(Boolean).length >= 2 && !hasNumber(r) && rows[i + 1] && hasNumber(rows[i + 1]));
+  if (headerIdx < 0) return null;
+  const columns = rows[headerIdx].slice(0, EXTRA_LIMITS.columns).map((c, i) => c || `Column ${i + 1}`);
+  if (columns.some((c) => PRIVATE_HEADER.test(c))) return "private";
+  const body = rows.slice(headerIdx + 1).filter((r) => !isBlankRow(r));
+  if (body.some((r) => r.some((c) => PRIVATE_CELL.test(c)))) return "private";
+  if (body.length === 0) return null;
+
+  const totals: Record<string, number> = {};
+  columns.forEach((col, i) => {
+    const vals = body.map((r) => num(r[i])).filter((n): n is number => n !== null);
+    // A column counts as numeric when most of its cells are numbers.
+    if (vals.length && vals.length >= body.length * 0.6) totals[col] = Math.round(vals.reduce((a, b) => a + b, 0) * 100) / 100;
+  });
+  const dates = rows.flat().map((c) => usDateToIso(c) ?? (/^\d{4}-\d{2}-\d{2}$/.test(c) ? c : null)).filter((d): d is string => !!d).sort();
+  const title = rows.slice(0, headerIdx).flat().find((c) => c && !hasNumber([c])) ?? fileName.replace(/\.[a-z]+$/i, "");
+  if (PRIVATE_HEADER.test(title) || /labor|payroll|schedule|timecard|bank/i.test(fileName)) return "private";
+  return {
+    type: "extraTable",
+    storeNumber: null,
+    period: dates.length ? { start: dates[0], end: dates.at(-1)! } : null,
+    title: title.slice(0, 80),
+    fileName,
+    columns,
+    rowCount: body.length,
+    rows: body.slice(0, EXTRA_LIMITS.rows).map((r) => columns.map((c, i) => (c in totals ? num(r[i]) : (r[i] ?? "").slice(0, 60) || null))),
+    totals,
   };
 }

@@ -4,6 +4,7 @@ import { csvToGrid, hasCell } from "./cells";
 import {
   parseCashInWeek,
   parseDayPart,
+  parseExtraTable,
   parseWisrAdjCogs,
   parseWisrBreadOverShort,
   parseWisrInventoryCategories,
@@ -27,12 +28,13 @@ export const REPORT_LABELS: Record<ReportType, string> = {
   wisrInventoryItems: "WISR Inventory Items",
   wisrBreadOverShort: "WISR Daily Cash / Bread Over-Short",
   cashInWeek: "Cash In Week",
+  extraTable: "Other report",
 };
 
 /** The four reports a store needs before recommendations can start. */
 export const REQUIRED_REPORTS: ReportType[] = ["dayPart", "wisrSales", "wisrUnits", "wisrAdjCogs"];
 
-export function detectReportType(grid: Grid): ReportType | "laborByEmployee" | null {
+export function detectReportType(grid: Grid): Exclude<ReportType, "extraTable"> | "laborByEmployee" | null {
   const first = (grid[0]?.[0] ?? "").replace(/^﻿/, "");
   // Payroll journals and staff schedules hold pay, addresses and names: refused like labor files.
   if (/^Payroll Journal Report/i.test(first) || hasCell(grid, "Employee Earnings")) return "laborByEmployee";
@@ -110,15 +112,24 @@ async function excelToGrid(buffer: ArrayBuffer): Promise<Grid> {
 /** Parse an uploaded file by name and contents. PDFs are not read yet. */
 export async function parseReportFile(fileName: string, data: ArrayBuffer): Promise<ParseResult> {
   const lower = fileName.toLowerCase();
-  if (lower.endsWith(".csv") || lower.endsWith(".txt")) {
-    return parseGrid(csvToGrid(new TextDecoder("utf-8").decode(data)));
-  }
+  let grid: Grid | null = null;
+  if (lower.endsWith(".csv") || lower.endsWith(".txt")) grid = csvToGrid(new TextDecoder("utf-8").decode(data));
   if (lower.endsWith(".xlsx")) {
     try {
-      return parseGrid(await excelToGrid(data));
+      grid = await excelToGrid(data);
     } catch {
       return { ok: false, reason: "unreadable", message: "We couldn't open this Excel file." };
     }
+  }
+  if (grid) {
+    const known = parseGrid(grid);
+    if (known.ok || known.reason !== "unrecognised") return known;
+    // Not a report we know: keep it as a small table, unless it holds personal details.
+    const extra = parseExtraTable(grid, fileName);
+    if (extra === "private") {
+      return { ok: false, reason: "rejected", rejectedType: "laborByEmployee", message: "This file has names, contact or pay details. We don't need them, so we haven't kept it." };
+    }
+    return extra ? { ok: true, report: extra } : known;
   }
   if (lower.endsWith(".pdf")) {
     return {

@@ -5,11 +5,11 @@ import { uploadWeek } from "../actions";
 
 type Group = "dayPart" | "wisr" | "other";
 
-const ACCEPT: Record<Group, string> = { dayPart: ".csv,.xlsx", wisr: ".zip,.csv,.xlsx", other: ".csv,.xlsx" };
+const ACCEPT: Record<Group, string> = { dayPart: ".csv,.xlsx", wisr: ".zip,.csv,.xlsx", other: ".csv,.xlsx,.zip" };
 const HINT: Record<Group, string> = {
   dayPart: "One Day Part CSV for one week",
   wisr: "The WISR zip for one week, as it downloads",
-  other: "Cash In Week CSV",
+  other: "Cash In Week, or another CSV or Excel export",
 };
 
 /** One empty week: its own upload button. The file goes in as soon as it's chosen. */
@@ -40,7 +40,7 @@ export function WeekUpload({ group, label, optional = false }: { group: Group; l
             name="files"
             type="file"
             accept={ACCEPT[group]}
-            multiple={group === "wisr"}
+            multiple={group !== "dayPart"}
             className="sr-only"
             disabled={pending}
             onChange={() => form.current?.requestSubmit()}

@@ -74,12 +74,27 @@ export function recentWeeks<T extends ParsedReport["type"]>(reports: ParsedRepor
   return [...byWeek.values()].slice(0, weeks);
 }
 
+const ROW_KEYS = ["item", "category", "day"];
+
+/** The field that names each row, when every row of every week has one (and names are unique). */
+function rowKey(lists: unknown[][]): string | null {
+  for (const k of ROW_KEYS) {
+    const ok = lists.every((l) => {
+      if (!l.every((r) => r && typeof r === "object" && typeof (r as Record<string, unknown>)[k] === "string")) return false;
+      const names = l.map((r) => (r as Record<string, unknown>)[k]);
+      return new Set(names).size === names.length;
+    });
+    if (ok && lists.some((l) => l.length)) return k;
+  }
+  return null;
+}
+
 /** The average of the same report over several weeks, field by field. Throws when the weeks don't line up. */
 function averageOf(xs: unknown[]): unknown {
   const first = xs[0];
   if (xs.every((x) => typeof x === "number")) return round((xs as number[]).reduce((a, b) => a + b, 0) / xs.length, 2);
   if (xs.every((x) => x === null || x === undefined)) return first;
-  if (xs.some((x) => typeof x === "number") && xs.every((x) => typeof x === "number" || x === null)) {
+  if (xs.some((x) => typeof x === "number") && xs.every((x) => typeof x === "number" || x === null || x === undefined)) {
     const nums = xs.filter((x): x is number => typeof x === "number");
     return round(nums.reduce((a, b) => a + b, 0) / nums.length, 2);
   }
@@ -88,7 +103,26 @@ function averageOf(xs: unknown[]): unknown {
     return first;
   }
   if (Array.isArray(first)) {
-    if (xs.some((x) => !Array.isArray(x) || x.length !== first.length)) throw new Error("weeks don't line up");
+    if (xs.some((x) => !Array.isArray(x))) throw new Error("weeks don't line up");
+    const key = rowKey(xs as unknown[][]);
+    if (key) {
+      // Lists of named rows (inventory items, categories, days) can differ week to week:
+      // match rows by name and average each over the weeks it appears in.
+      const order: string[] = [];
+      const byName = new Map<string, unknown[]>();
+      for (const list of xs as Record<string, unknown>[][]) {
+        for (const row of list) {
+          const name = String(row[key]);
+          if (!byName.has(name)) {
+            byName.set(name, []);
+            order.push(name);
+          }
+          byName.get(name)!.push(row);
+        }
+      }
+      return order.map((name) => averageOf(byName.get(name)!));
+    }
+    if (xs.some((x) => (x as unknown[]).length !== first.length)) throw new Error("weeks don't line up");
     return first.map((_, i) => averageOf(xs.map((x) => (x as unknown[])[i])));
   }
   if (first && typeof first === "object") {

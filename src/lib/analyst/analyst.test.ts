@@ -321,3 +321,31 @@ describe("several weeks and varied offers", () => {
     expect(itemKey("cookies")).not.toBe(itemKey("chips"));
   });
 });
+
+describe("optional reports and the store report", () => {
+  it("reads Cash In Week dates and any other uploaded report", async () => {
+    const base = await load(SAMPLE, SAMPLE_FILES);
+    const cash = (await parseReportFile(
+      "CashInWeek.csv",
+      new TextEncoder().encode("Cash In Week Report\nDate,Net Sales\n10/05/2026,900\n10/06/2026,1300\n10/12/2026,1100\n").buffer,
+    )) as { ok: true; report: ParsedReport };
+    const extra = (await parseReportFile("Promo.csv", new TextEncoder().encode("Promo Sales\nPromo,Redeemed,Sales\nSub of the day,40,240\n").buffer)) as { ok: true; report: ParsedReport };
+    expect(cash.ok && extra.ok).toBe(true);
+    const ctx = ctxFor([...base, cash.report, extra.report]);
+
+    const daily = run(ctx, "get_daily_sales");
+    expect(daily).toMatchObject({ dates: 3, average_per_day: 1100 });
+    expect((daily.best_dates as { date: string }[])[0].date).toBe("2026-10-06");
+    expect((run(ctx, "list_reports").other_reports as { title: string }[])[0].title).toBe("Promo Sales");
+    expect(run(ctx, "get_other_report", { number: 1 })).toMatchObject({ column_totals: { Redeemed: 40, Sales: 240 } });
+
+    const { prefetchFor } = await import("./run");
+    expect(prefetchFor(ctx).map((p) => p.name)).toEqual(expect.arrayContaining(["get_daily_sales", "get_inventory_usage", "get_bread_over_short", "get_sales_mix"]));
+
+    const { buildStoreReport } = await import("./report");
+    const report = buildStoreReport(ctx);
+    expect(report.week?.net_sales).toBeTypeOf("number");
+    expect(report.highlights.length).toBeGreaterThan(2);
+    expect(report.highlights.map((h) => h.title).join(" ")).toMatch(/slowest daytime hour|weakest day/);
+  });
+});

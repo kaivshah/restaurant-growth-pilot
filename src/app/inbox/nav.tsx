@@ -5,7 +5,12 @@ import { usePathname } from "next/navigation";
 
 /** The main menu, grouped by job: what to review, catering, customers, settings. */
 const GROUPS: { title?: string; items: { href: string; label: string; match: string[] }[] }[] = [
-  { items: [{ href: "/inbox", label: "Approval Inbox", match: ["/inbox"] }] },
+  {
+    items: [
+      { href: "/inbox", label: "Approval Inbox", match: ["/inbox"] },
+      { href: "/report", label: "Store report", match: ["/report"] },
+    ],
+  },
   {
     title: "Catering",
     items: [
