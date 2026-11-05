@@ -158,7 +158,7 @@ export function checkCateringOffer(o: CateringOffer, ctx: CateringContext, log: 
     if (o.percent_off === undefined) problems.push("A % off offer needs percent_off.");
     else if (o.percent_off > ctx.rules.maxDiscountPct) problems.push(`${o.percent_off}% off is over the ${ctx.rules.maxDiscountPct}% limit.`);
   }
-  if ((o.mechanic === "amount_off" || o.mechanic === "free_item") && o.value_usd === undefined) problems.push("The offer's dollar value is missing.");
+  // No separate dollar value is needed: any $ amount in the offer's text is checked against the data below.
   if (o.min_people < ctx.restaurant.minCateringOrder) problems.push(`The smallest catering order is ${ctx.restaurant.minCateringOrder} people.`);
   if (!REPORT_OR_SCAN.test(o.why)) problems.push("The reason doesn't say which report or scan fact it comes from.");
   problems.push(...checkEvidence(o.evidence, log));

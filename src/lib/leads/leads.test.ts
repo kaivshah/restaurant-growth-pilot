@@ -301,6 +301,8 @@ describe("catering offers decided by the AI", () => {
     expect(checkCateringOffer(offer({ why: "They will like it." }), ctx, clog).join(" ")).toMatch(/which report/);
     expect(checkCateringOffer(offer({ selling_points: ["Loved by 5,000 locals"] }), ctx, clog).join(" ")).toMatch(/5,000/);
     expect(checkCateringOffer(offer({ min_people: 4 }), ctx, clog).join(" ")).toMatch(/smallest catering order is 10/);
+    // A free platter without a separate dollar value is fine (it was wrongly refused before).
+    expect(checkCateringOffer(offer({ mechanic: "free_item", percent_off: undefined, value_usd: undefined, title: "A free cookie platter with your first catering order" }), ctx, clog)).toEqual([]);
   });
 
   it("decides one offer per business in one request, and asks again for the ones that failed", async () => {

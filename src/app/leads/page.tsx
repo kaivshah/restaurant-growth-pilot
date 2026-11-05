@@ -196,9 +196,15 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
       )}
       {pitching && pitchJob?.status === "RUNNING" && pitchJob.message && <p className="font-semibold text-ink-2">{pitchJob.message}</p>}
       {recentPitchJob?.status === "DONE" && recentPitchJob.message && (
-        <Notice tone="green" title="Pitches written.">
-          {recentPitchJob.message}. <Link href="/inbox?tab=catering">Review them in the inbox</Link>.
-        </Notice>
+        recentPitchJob.message.startsWith("Wrote 0 ") ? (
+          <Notice tone="danger" title="No pitch was written.">
+            {recentPitchJob.message.replace(/^Wrote 0 pitches; /, "")}. Try Generate pitch again; the AI gets the reason and another try.
+          </Notice>
+        ) : (
+          <Notice tone="green" title="Pitches written.">
+            {recentPitchJob.message}. <Link href="/inbox?tab=catering">Review them in the inbox</Link>.
+          </Notice>
+        )
       )}
       {recentPitchJob?.status === "FAILED" && (
         <Notice tone="danger" title="Pitches weren't written.">
