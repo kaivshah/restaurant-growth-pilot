@@ -51,6 +51,8 @@ type IdeaResult = { offers: OfferCandidate[]; analysisRunId: string | null; note
  * A run is reused while the reports, rules and past decisions are unchanged,
  * so refreshing doesn't pay for the same analysis twice.
  */
+const ANALYST_VERSION = 2;
+
 async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof usableReports>>["rows"]): Promise<IdeaResult> {
   const reports = rows.map((r) => r.data as unknown as ParsedReport);
   const baseline = buildOffers(computeInsights(reports), restaurant);
@@ -71,6 +73,8 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
     .update(
       JSON.stringify({
         analyst: `${analyst.provider}:${analyst.model}`,
+        // Bump when the analyst's prompt, tools or checks change, so the next run doesn't reuse old ideas.
+        version: ANALYST_VERSION,
         reports: rows.map((r) => [r.id, r.status]),
         rules: ctx.rules,
         restaurant: ctx.restaurant,
