@@ -7,7 +7,7 @@ import { analystFromEnv } from "@/lib/analyst";
 import { ensureTodaysPlan } from "@/lib/daily";
 import { db } from "@/lib/db";
 import { jobState, kickJobs, pitchesInProgress, requeueStaleJobs } from "@/lib/drafts";
-import { OFFER_TEXT, latestSuggestions, mapsUrl } from "@/lib/leads";
+import { latestSuggestions, mapsUrl } from "@/lib/leads";
 import { EVENT_WINDOW_DAYS, LEAD_SKIP_REASONS, categoryLabel } from "@/lib/leads/score";
 import { requireRestaurant } from "@/lib/restaurant";
 import { scanMyArea, searchWebEvents } from "../inbox/actions";
@@ -94,7 +94,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     view === "events" ? db.event.findMany({ where: eventWhere, include: { venueLead: true }, take: 150 }) : Promise.resolve([]),
     view === "businesses" ? db.lead.findMany({ where: leadWhere, include: { contacts: { orderBy: { createdAt: "asc" } } }, take: 150 }) : Promise.resolve([]),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "LEADS" }, orderBy: { createdAt: "desc" } }),
-    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: { in: ["SUGGEST", "DAILY"] } }, orderBy: { createdAt: "desc" } }),
+    db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "SUGGEST" }, orderBy: { createdAt: "desc" } }),
     db.draftJob.findFirst({ where: { restaurantId: restaurant.id, kind: "PITCH" }, orderBy: { createdAt: "desc" } }),
     pitchesInProgress(restaurant.id),
     db.leadScan.findFirst({ where: { restaurantId: restaurant.id }, orderBy: { createdAt: "desc" } }),
@@ -162,20 +162,25 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         <div className="flex flex-col gap-1">
           <h1 className="text-[32px] leading-tight font-extrabold tracking-tight">Leads & events</h1>
           <p className="max-w-[72ch] text-lg text-ink-2">
-            Businesses and events in the next 30 days within {restaurant.radiusMiles} mi of your store. The AI picks the ones most likely to order catering; click{" "}
-            <strong>Generate pitch</strong> on any of them and the draft waits in your <Link href="/inbox?tab=catering">Approval Inbox</Link>.
+            Businesses and events in the next 30 days within {restaurant.radiusMiles} mi of your store. Click <strong>Suggest best prospects</strong> and the AI picks the ones most
+            likely to order catering. Click <strong>Generate pitch</strong> on any business or event: the AI chooses its catering offer from your reports and writes the email,
+            which waits in your <Link href="/inbox?tab=catering">Approval Inbox</Link>.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {aiOn && (
             <form action={suggestAction}>
-              <button type="submit" disabled={suggesting || scanning} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60">
-                {suggesting ? "Picking…" : "Refresh picks"}
+              <button
+                type="submit"
+                disabled={suggesting || scanning || !scan}
+                className={`min-h-11 rounded-field px-4 font-bold disabled:opacity-60 ${suggestions.at ? "border border-field bg-surface hover:border-primary" : "bg-primary text-white hover:bg-primary-hover"}`}
+              >
+                {suggesting ? "Picking…" : suggestions.at ? "Suggest again" : "Suggest best prospects"}
               </button>
             </form>
           )}
           <form action={scanMyArea}>
-            <button type="submit" disabled={scanning} className="min-h-11 rounded-field bg-primary px-5 font-bold text-white hover:bg-primary-hover disabled:opacity-60">
+            <button type="submit" disabled={scanning} className="min-h-11 rounded-field border border-field bg-surface px-5 font-bold hover:border-primary disabled:opacity-60">
               {scanning ? "Scanning…" : "Scan my area"}
             </button>
           </form>
@@ -225,7 +230,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
               : suggesting
                 ? "The AI is picking the most likely catering customers…"
                 : aiOn
-                  ? "Picks appear here after the area scan."
+                  ? scan
+                    ? "Click “Suggest best prospects” and the AI picks the businesses and events most likely to order."
+                    : "Scan your area first, then ask the AI for its picks."
                   : "Turn on an AI provider to get picks."}
           </p>
         </div>
@@ -254,7 +261,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                   <span className="flex flex-wrap items-center gap-1.5">
                     <Pill tone="green">Highly recommended</Pill>
                     <Pill tone={event ? "sun" : "sand"}>{event ? cap(event.category) : categoryLabel(lead.category)}</Pill>
-                    <span className="text-[13px] font-bold text-muted">{p.by === "fit" ? "Best fit score" : `AI pick · ${p.confidence} confidence`}</span>
+                    <span className="text-[13px] font-bold text-muted">AI pick · {p.confidence} confidence</span>
                   </span>
                   <p className="text-[17px] font-bold">{event ? event.title : lead.name}</p>
                   <p className="text-sm font-semibold text-ink-2">
@@ -266,7 +273,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                   </p>
                   <p className="rounded-field bg-primary-soft px-3 py-2 text-sm text-primary-ink">{p.why}</p>
                   <p className="text-[13px] text-muted">
-                    For: {p.occasion} · Offer: {OFFER_TEXT[p.offer]}
+                    For: {p.occasion} · The offer is chosen from your reports when you generate the pitch
                   </p>
                   <div className="mt-auto pt-1">
                     {existing ? (

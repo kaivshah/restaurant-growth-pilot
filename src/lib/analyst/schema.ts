@@ -1,8 +1,11 @@
 import { z } from "zod";
 
 export const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
-export const MECHANICS = ["free_item", "amount_off", "percent_off", "bundle_price", "catering_promo"] as const;
-export const AUDIENCES = ["email_list", "in_store_qr", "email_and_qr", "catering_leads"] as const;
+/** In-store offers for customers who visit. Catering offers are decided per pitch (see leads). */
+export const MECHANICS = ["free_item", "amount_off", "percent_off", "bundle_price", "bogo", "loyalty_reward"] as const;
+export const AUDIENCES = ["email_list", "in_store_qr", "email_and_qr"] as const;
+/** What the offer is for: bring in new customers, raise what visitors spend, or bring regulars back. */
+export const GOALS = ["attract", "grow_sales", "retain"] as const;
 /** The store problem an offer is meant to fix; each proposal must fix a different one. */
 export const TARGETS = [
   "slow_hours",
@@ -13,7 +16,7 @@ export const TARGETS = [
   "falling_customers",
   "new_customers",
   "extra_stock",
-  "catering",
+  "retain_regulars",
 ] as const;
 
 const Evidence = z.object({
@@ -32,16 +35,19 @@ export const Finding = z.object({
 export const Proposal = z.object({
   title: z.string().max(80).describe('Short name of the offer, e.g. "Free fountain drink with any footlong, Mon–Thu 3–5 pm"'),
   target: z.enum(TARGETS).describe("The store problem this offer fixes"),
+  goal: z.enum(GOALS).describe("attract new customers, grow_sales from visitors, or retain regulars"),
   mechanic: z.enum(MECHANICS),
   item: z.string().max(60).describe("What is free or discounted"),
   qualifying_purchase: z.string().max(80).describe('What the customer must buy, e.g. "any footlong", or "none"'),
   value_usd: z.number().nonnegative().optional().describe("Retail value of the free item, or dollars off"),
   percent_off: z.number().min(0).max(100).optional(),
+  visits_required: z.number().int().min(2).max(12).optional().describe("For loyalty_reward: visits needed to earn the reward"),
   days: z.array(z.enum(DAYS)).min(1),
   start_hour: z.number().int().min(0).max(23),
   end_hour: z.number().int().min(1).max(24).describe("Hour the offer ends, 24-hour clock (17 = 5 pm)"),
   duration_weeks: z.number().int().min(1).max(8),
   audience: z.enum(AUDIENCES),
+  for_sign_up: z.boolean().optional().describe("True for the gift customers get by email when they join the list from the counter QR card"),
   why: z.string().max(500).describe("Why this store should run it, citing the numbers in evidence"),
   expected_effect: z.string().max(200).describe("What should change and how the owner will see it"),
   confidence: z.enum(["low", "medium", "high"]),
@@ -104,22 +110,25 @@ export const SUBMIT_SCHEMA = {
         properties: {
           title: { type: "string" },
           target: { type: "string", enum: [...TARGETS] },
+          goal: { type: "string", enum: [...GOALS] },
           mechanic: { type: "string", enum: [...MECHANICS] },
           item: { type: "string" },
           qualifying_purchase: { type: "string" },
           value_usd: { type: "number" },
           percent_off: { type: "number" },
+          visits_required: { type: "integer" },
           days: { type: "array", items: { type: "string", enum: [...DAYS] } },
           start_hour: { type: "integer" },
           end_hour: { type: "integer" },
           duration_weeks: { type: "integer" },
           audience: { type: "string", enum: [...AUDIENCES] },
+          for_sign_up: { type: "boolean" },
           why: { type: "string" },
           expected_effect: { type: "string" },
           confidence: { type: "string", enum: ["low", "medium", "high"] },
           evidence: evidenceJson,
         },
-        required: ["title", "target", "mechanic", "item", "qualifying_purchase", "days", "start_hour", "end_hour", "duration_weeks", "audience", "why", "expected_effect", "confidence", "evidence"],
+        required: ["title", "target", "goal", "mechanic", "item", "qualifying_purchase", "days", "start_hour", "end_hour", "duration_weeks", "audience", "why", "expected_effect", "confidence", "evidence"],
         additionalProperties: false,
       },
     },

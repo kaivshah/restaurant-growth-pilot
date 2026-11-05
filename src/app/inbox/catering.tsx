@@ -25,10 +25,16 @@ type PitchEvidence = {
   mapsUrl: string;
   event: { title: string; date: string; attendance: number | null; url: string | null; source: string } | null;
   occasion: string;
-  offer: string;
+  /** The AI's catering offer for this business (pitches from before only have a fixed offer key) */
+  cateringOffer?: { title: string };
+  offer?: string;
+  /** Why the AI picked this business earlier, if it did */
+  pickReason?: string;
 };
 
-const OFFER_SHORT: Record<string, string> = { free_cookie_platter: "Free cookie platter", free_drinks_tray: "Free drinks tray", free_delivery: "Free delivery" };
+/** The offers of pitches written before offers were decided by the AI. */
+const LEGACY_OFFER: Record<string, string> = { free_cookie_platter: "Free cookie platter", free_drinks_tray: "Free drinks tray", free_delivery: "Free delivery" };
+const offerOf = (e: PitchEvidence | null) => e?.cateringOffer?.title ?? LEGACY_OFFER[e?.offer ?? ""] ?? "Catering offer";
 
 const when = (d: Date) => d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" });
 
@@ -112,7 +118,7 @@ export async function CateringTab({
                     </span>
                     <span className="text-[17px] font-bold">{x.title}</span>
                     <span className="text-sm text-muted">
-                      Fit {x.lead?.fitScore ?? "–"} · {x.lead?.distanceMiles ?? "?"} mi · {OFFER_SHORT[e?.offer ?? ""] ?? "Catering offer"}
+                      Fit {x.lead?.fitScore ?? "–"} · {x.lead?.distanceMiles ?? "?"} mi · {offerOf(e)}
                     </span>
                     {e?.event && (
                       <span className="text-sm font-semibold text-ink-2">
@@ -199,8 +205,16 @@ export async function CateringTab({
                 )}
 
                 <div className="flex flex-col gap-3 rounded-2xl bg-ground p-5">
-                  <p className="text-[13px] font-bold text-muted">Why this lead</p>
+                  <p className="text-[13px] font-bold text-muted">The offer</p>
+                  <p className="text-lg font-bold">{offerOf(ev)}</p>
+                  <p className="text-[13px] font-bold text-muted">Why this offer, from your reports</p>
                   <p className="text-[15px]">{selected.why}</p>
+                  {ev?.pickReason && (
+                    <>
+                      <p className="text-[13px] font-bold text-muted">Why the AI picked this business</p>
+                      <p className="text-[15px] text-ink-2">{ev.pickReason}</p>
+                    </>
+                  )}
                   {ev?.reasons?.length ? (
                     <ul className="flex flex-col gap-1 text-sm text-ink-2">
                       {ev.reasons.map((r) => (
@@ -210,7 +224,7 @@ export async function CateringTab({
                   ) : null}
                   {ev?.citations?.length ? (
                     <div className="flex flex-col gap-2">
-                      <p className="text-[13px] font-bold text-muted">Numbers the AI used, checked against the scan</p>
+                      <p className="text-[13px] font-bold text-muted">Numbers the AI used, checked against your reports and the scan</p>
                       <ul className="flex flex-col gap-1.5">
                         {ev.citations.map((c, i) => (
                           <li key={i} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-t border-sand pt-1.5 text-sm">

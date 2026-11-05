@@ -24,10 +24,10 @@ Name not decided yet, so the app calls itself **product**.
      - a few lines about the store, worked out from the reports (sales, lunch share, quiet hours for catering prep, catering share, discount level);
      - the best 80 businesses;
      - the best 25 events.
-   - Then it makes **two AI requests side by side**:
-     - customer **deals** for people visiting the store (Approval Inbox → Customer offers);
-     - the **20 businesses and events most likely to order catering**, shown as **Highly recommended** at the top of Leads & events, with everything else below.
-4. **Generate pitch** on any row writes a draft from the saved data (one AI request covers up to 8 pitches).
+   - Then the AI studies the reports and proposes **3–5 in-store offers** for people who visit the store (Approval Inbox → Customer offers): at least one to attract new customers, one to grow what visitors spend, one to bring regulars back. Any deal type the owner's rules allow (free item, $ or % off, bundle, buy-one-get-one, loyalty reward); each has a rationale naming the report it comes from, with every number checked. If fewer than 3 pass the checks, the AI is asked once more with the reasons.
+   - By default every deal type is allowed (no brand approval needed, 25% largest discount); Settings → Offer rules can restrict it.
+4. **Suggest best prospects** (Leads & events) is the owner's choice: the AI then picks the 20 businesses and events most likely to order catering, shown as **Highly recommended** above everything else. Nothing is picked before the owner asks.
+5. **Generate pitch** on any business or event: the AI first chooses the **catering offer for that business** from the store's analysis (its reports, the analysis findings, approved offers) and what the scan says about the business, with a rationale; then the email is written from those facts. One request decides the offers for all pitches asked for together, and one writes up to 8 emails. There are no fixed catering offers.
    - No contact lookup and no sending for now (`CONTACT_LOOKUP` and `EMAIL_SENDING` are off).
    - Approve the draft, then **Copy email** and send it from your own mail.
 
@@ -42,7 +42,7 @@ Everything is written and decided by Claude; there are no pre-written drafts.
 4. Restart `npm run dev` and `npm run worker`. Both print which AI they use on their first line, and `npm run ai:check` sends one test request of each kind.
 
 **Keeping the cost down:**
-- **AI only on request.** Scans use no AI. The daily plan makes about two requests (deals and catering picks, side by side) and reuses its answers until the data changes. One request writes up to 8 pitches.
+- **AI only on request.** Scans use no AI. The daily plan makes one request for the in-store offers (two if too few pass the checks) and reuses its answer until the data changes. Picks run only when the owner asks. Generate pitch makes one request to decide the catering offers and one to write up to 8 emails.
 - **Small, stable requests.** Instructions go first in a system block cached for an hour, so the second and later requests in that hour read them at a fraction of the price (Opus 5.5 cache reads cost $0.20 per million tokens instead of $4). The owner's data is sent compactly after it.
 - **Low effort for emails.** The analysis uses the model's default (`ANALYST_EFFORT` changes it).
 - **No paying twice.** Results are cached in Postgres (daily context, analyses, Google and event results), so restarts and other servers reuse them instead of starting cold.
@@ -63,7 +63,7 @@ Without a key, the inbox says "AI isn't set up yet" and nothing is drafted.
 | Approving a pitch | 1 per 8 pitches, for the two follow-ups |
 | Daily plan: deals (after reports are confirmed, or Refresh ideas) | Usually 1–2 for the analysis, plus 1 per new offer email |
 
-AI jobs run one at a time per restaurant, pitches first; the daily plan runs its two requests side by side.
+AI jobs run one at a time per restaurant, pitches first.
 
 **Privacy:** the AI gets the store's totals and offer facts, and in pitches the business name and the contact's first name. No customer data, names of staff or pay is ever sent.
 
@@ -76,7 +76,7 @@ AI jobs run one at a time per restaurant, pitches first; the daily plan runs its
 ### Milestone 4: your own customer list, personal codes and results
 
 - **Sign-up by QR code.** **Customers → Print the QR poster** prints a sheet for the counter. Scanning it opens a public sign-up page (`/join/<your-link>`) where customers enter their email (first name optional) and tick that they agree to get offers. You can also add someone who said yes yourself.
-- **Welcome gift.** Approve the "Free cookie when you join" offer in the Approval Inbox and every new sign-up gets a personal code on screen and by email, valid for 30 days. Joining again with the same email doesn't make a second code.
+- **Welcome gift.** When the AI proposes a sign-up gift (an offer for joining the list from the counter QR card), approve it in the Approval Inbox and every new sign-up gets a personal code on screen and by email, valid for 30 days. Joining again with the same email doesn't make a second code.
 - **Send an offer to the list.** Approve an offer with a code (the drink or chips ideas, or AI ideas aimed at your list), then choose **Everyone**, **Regulars** (3+ codes used in 60 days) or **Haven't been back** (joined 30+ days ago, nothing used in 30 days) and press **Send to customers**. Each person gets their own code, which works until the offer's last day (from "Valid for 4 weeks"). Emails go out from your Gmail any day between 10 am and 7 pm, about a minute apart, up to the daily limit on the Customers page (100 by default; a personal Gmail can send about 500 a day in total). People who already got an offer are skipped, so pressing it again only reaches new sign-ups. **Stop the rest** cancels emails not yet sent.
 - **Redeem at the counter.** **Redeem a code** works on a phone: type the code (spaces, dashes and small letters are fine), see whether it's valid, used or expired and who it belongs to, then **Give the offer and mark used**. A code can only be used once, even if two people press at the same moment.
 - **Results.** Each offer shows codes given, emails sent, codes used and the use rate, in the inbox and on the Customers page.
@@ -155,7 +155,7 @@ Turn it on with `ANALYST_PROVIDER` and the AI takes part in **deciding** what to
 2. **It decides.** It submits findings ("AI found this week") and up to 5 offer proposals: mechanic, item, days, hours, value, expected effect and confidence. It also decides whether to keep, change or drop each standard idea.
 3. **Code verifies everything** (`src/lib/analyst/verify.ts`) before anything reaches the inbox:
    - Every cited number must equal what the cited tool returned, and every $ or % in the text must match the data.
-   - Offers must stay within the discount limit, use only allowed offer types, follow brand-safe mode (free extras only) and run within the store's sales hours.
+   - Offers must stay within the discount limit, use only allowed offer types, follow brand-safe mode (free extras only, only if the owner turns it on) and run within the store's sales hours.
    - Near-duplicates and previously decided ideas are dropped.
    - Anything that fails is logged with its reasons on the **How the AI decided** page (`/inbox/analysis/<id>`).
 4. **It learns over time.** Past approvals and skip reasons are given to the analyst on each run. A run is reused while the reports, rules and decisions are unchanged, so you don't pay twice.
@@ -172,11 +172,7 @@ Each run is stored in `AnalysisRun`: findings, accepted and rejected ideas, ever
 
 ### Milestone 2: offer ideas in the Approval Inbox
 
-After setup, the app turns the owner's confirmed reports into offer ideas, each with the numbers behind it and editable copy:
-
-- **Welcome offer:** a free cookie for joining the email list, which builds the customer list.
-- **Slow-hours offer:** a drink deal for weekdays 3–5 pm, with an hourly sales chart. It's a free drink only if the drink's value fits the owner's discount limit, otherwise a $1 drink.
-- **Extra-stock offer:** free chips with a 6-inch sub, Sat–Mon, when the bread report shows weekend surplus.
+After setup, the AI turns the owner's reports into offer ideas, each with the numbers behind it and editable copy. (The fixed welcome, slow-hours and extra-stock ideas of the first version have been removed: every offer is now the AI's, from the data.)
 
 The owner can approve, edit, skip (with a reason), undo, or ask the AI to rewrite a draft (up to 5 times). **Refresh ideas** rebuilds drafts; the same facts are never drafted twice.
 

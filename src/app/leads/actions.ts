@@ -110,9 +110,10 @@ export async function queuePitches(formData: FormData) {
 }
 
 /** "Refresh picks": run the day's plan again, in the background. */
+/** The owner asks the AI to pick the businesses and events most likely to order catering. */
 export async function suggestAction() {
   const restaurant = await requireRestaurant();
-  await enqueueDraftJob(restaurant.id, "DAILY");
+  await enqueueDraftJob(restaurant.id, "SUGGEST");
   after(() => kickJobs());
   done();
 }

@@ -21,7 +21,7 @@ export interface PitchFacts {
   /** e.g. "office", "event venue" */
   category: string;
   distanceMiles: number;
-  /** e.g. "a free cookie platter" */
+  /** The AI's catering offer, e.g. "15% off your first catering order" */
   offer: string;
   minOrder: number;
   occasion: string;

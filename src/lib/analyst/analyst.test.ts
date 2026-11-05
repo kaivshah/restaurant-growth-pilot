@@ -108,6 +108,7 @@ describe("checks on what the AI submits", () => {
     const base: Proposal = {
       title: "Free cookie with any footlong, 7–9 pm",
       target: "slow_hours",
+      goal: "grow_sales",
       mechanic: "free_item",
       item: "cookie",
       qualifying_purchase: "any footlong",
@@ -144,9 +145,10 @@ describe("a full analyst run (scripted model)", () => {
     const ctx = ctxFor(await load(SAMPLE, SAMPLE_FILES));
     const out = await runAnalysis(fakeAnalyst(), ctx, []);
     expect(out.status).toBe("DONE");
-    expect(out.toolCalls).toBe(4);
+    expect(out.toolCalls).toBe(4); // three offers passed, so no second try
     expect(out.findings).toHaveLength(1);
-    expect(out.proposals.map((p) => p.title)).toEqual(["Free chips with any footlong, 7–9 pm"]);
+    expect(out.proposals.map((p) => p.title)).toEqual(["Free chips with any footlong, 7–9 pm", "Free 6-inch sub after 6 visits", "Free cookie for joining our email list"]);
+    expect(out.proposals.map((p) => p.goal)).toEqual(["grow_sales", "retain", "attract"]);
     const rejected = out.rejected.find((r) => r.title.startsWith("20% off"))!;
     expect(rejected.reasons.join(" ")).toMatch(/returned/); // invented 99999
     expect(rejected.reasons.join(" ")).toMatch(/brand allows/);
@@ -155,8 +157,25 @@ describe("a full analyst run (scripted model)", () => {
     expect(offer).toMatchObject({ source: "AI_ANALYST", confidence: "medium", schedule: "Mon–Thu, 7–9 pm · for 3 weeks", needsCode: true });
     expect(offer.evidence?.kind).toBe("citations");
 
-    const merged = mergeIdeas([], [offer], out);
-    expect(merged.map((o) => o.key)).toEqual(["ai-free-chips-with-any-footlong-7-9-pm"]);
+    const merged = mergeIdeas([], out.proposals.map((p) => proposalToOffer(p, ctx, out.toolLog)), out);
+    expect(merged.map((o) => o.key)).toEqual(["ai-free-chips-with-any-footlong-7-9-pm", "ai-free-6-inch-sub-after-6-visits", "welcome"]); // the sign-up gift is the welcome offer
+  });
+
+  it("asks once more when fewer than 3 offers pass the checks", async () => {
+    const ctx = ctxFor(await load(SAMPLE, SAMPLE_FILES));
+    const prompts: string[] = [];
+    const model: AnalystModel = {
+      provider: "test",
+      model: "retry",
+      start: ({ user }) => {
+        prompts.push(user);
+        return { send: async () => ({ toolCalls: [{ id: "s", name: "submit_analysis", input: { findings: [], proposals: [] } }], text: "", inputTokens: 1, outputTokens: 1 }) };
+      },
+    };
+    const out = await runAnalysis(model, ctx, []);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toMatch(/Propose 5 more, different ones/);
+    expect(out.status).toBe("DONE");
   });
 
   it("enforces the tool budget and fails cleanly when the model never submits", async () => {
@@ -211,7 +230,7 @@ describe.runIf(PRIVATE_FILES.every((f) => existsSync(join(PRIVATE, f))))("pilot 
     expect(run(ctx, "estimate_offer_cost", { mechanic: "free_item", value_usd: 2.5 })).toMatchObject({ value_pct_of_ticket: 18.4, within_limit: false });
     const out = await runAnalysis(fakeAnalyst(), ctx, []);
     expect(out.status).toBe("DONE");
-    expect(out.proposals).toHaveLength(1);
+    expect(out.proposals.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -257,6 +276,7 @@ describe("several weeks and varied offers", () => {
     const proposal = (title: string, item: string, target: Proposal["target"]) => ({
       title,
       target,
+      goal: "grow_sales",
       mechanic: "free_item",
       item,
       qualifying_purchase: "any footlong",

@@ -46,15 +46,13 @@ const AUDIENCE_TEXT: Record<Proposal["audience"], string> = {
   email_list: "Your email list",
   in_store_qr: "In-store customers, via the counter QR card",
   email_and_qr: "Your email list, plus the counter QR card",
-  catering_leads: "Nearby businesses that order catering",
 };
 
-const CATEGORY: Record<Proposal["mechanic"], string> = {
-  free_item: "Free extra",
-  amount_off: "Money off",
-  percent_off: "Percent off",
-  bundle_price: "Bundle deal",
-  catering_promo: "Catering",
+/** The inbox label: what the offer is for. */
+const GOAL_LABEL: Record<Proposal["goal"], string> = {
+  attract: "Attract customers",
+  grow_sales: "Grow sales",
+  retain: "Bring them back",
 };
 
 function sourceOf(e: Evidence, log: ToolLog): string {
@@ -73,22 +71,23 @@ export function slug(s: string) {
 
 /** Turns a verified AI proposal into an inbox offer. */
 export function proposalToOffer(p: Proposal, ctx: AnalystContext, log: ToolLog): OfferCandidate {
-  const est = p.mechanic === "catering_promo" ? null : estimateOfferCost(ctx, { mechanic: p.mechanic, value_usd: p.value_usd, percent_off: p.percent_off });
-  const needsCode = p.audience !== "in_store_qr" && p.audience !== "catering_leads";
+  const est = estimateOfferCost(ctx, { mechanic: p.mechanic, value_usd: p.value_usd, percent_off: p.percent_off, visits_required: p.visits_required });
+  const needsCode = p.audience !== "in_store_qr";
   const brandSafe = ctx.rules.promoApproval !== "YES";
   const when = `${daysShort(p.days)}, ${hoursText(p.start_hour, p.end_hour)}`;
   const cost =
     p.mechanic === "percent_off"
       ? `${p.percent_off}% off qualifying orders`
       : p.value_usd !== undefined
-        ? `${money(p.value_usd)} per use${est?.value_pct_of_ticket != null ? ` (${est.value_pct_of_ticket}% of an average order)` : ""}`
-        : "Set by your catering prices";
+        ? `${money(p.value_usd)} per ${p.mechanic === "loyalty_reward" ? `reward, earned over ${p.visits_required} visits` : "use"}${est?.value_pct_of_ticket != null ? ` (${est.value_pct_of_ticket}% of an average order)` : ""}`
+        : "One item per use";
 
   return {
-    key: `ai-${slug(p.title)}`,
+    // The sign-up gift is emailed to everyone who joins the list (see customers), under the key "welcome".
+    key: p.for_sign_up ? "welcome" : `ai-${slug(p.title)}`,
     source: "AI_ANALYST",
     confidence: p.confidence,
-    category: CATEGORY[p.mechanic],
+    category: GOAL_LABEL[p.goal],
     title: p.title,
     schedule: `${when} · for ${p.duration_weeks} ${p.duration_weeks === 1 ? "week" : "weeks"}`,
     why: p.why,
@@ -96,7 +95,7 @@ export function proposalToOffer(p: Proposal, ctx: AnalystContext, log: ToolLog):
     cost,
     measure: p.expected_effect,
     checks: [
-      ...(p.mechanic === "catering_promo" ? [] : [`Within your ${ctx.rules.maxDiscountPct}% limit`]),
+      `Within your ${ctx.rules.maxDiscountPct}% limit`,
       "Numbers checked against your reports",
       ...(needsCode ? ["Unique redemption code"] : []),
       `Ends after ${p.duration_weeks} ${p.duration_weeks === 1 ? "week" : "weeks"}`,

@@ -10,7 +10,7 @@ type Offer = { key: string; title: string; schedule: string; why: string; confid
 type Rejected = { kind: string; title: string; reasons: string[] };
 type Decision = { key: string; action: "keep" | "change" | "drop"; reason: string };
 type ToolEntry = { id: string; name: string; input: unknown };
-type PitchEntry = { lead_id: string; offer: string; occasion: string; why: string; confidence: string };
+type PitchEntry = { lead_id: string; offer?: string; occasion: string; why: string; confidence: string };
 type SkipEntry = { lead_id: string; reason: string };
 
 const OFFER_SHORT: Record<string, string> = { free_cookie_platter: "Free cookie platter", free_drinks_tray: "Free drinks tray", free_delivery: "Free delivery" };
@@ -98,7 +98,7 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
                   <li key={p.lead_id} className="flex flex-col gap-1 border-t border-sand pt-3">
                     <p className="font-bold">{leadNames.get(p.lead_id) ?? "A business no longer in your scan"}</p>
                     <p className="text-sm text-muted">
-                      {OFFER_SHORT[p.offer] ?? p.offer} · {p.occasion} · {p.confidence} confidence
+                      {p.offer ? `${OFFER_SHORT[p.offer] ?? p.offer} · ` : ""}{p.occasion} · {p.confidence} confidence
                     </p>
                     <p className="text-[15px] text-ink-2">{p.why}</p>
                   </li>

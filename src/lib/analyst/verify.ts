@@ -86,7 +86,7 @@ const REPORT_WORDS = /report|day ?part|wisr|sales summary|units summary|inventor
 
 export function checkProposal(p: Proposal, ctx: AnalystContext, log: ToolLog): string[] {
   const problems: string[] = [...checkEvidence(p.evidence, log)];
-  const extra = [p.value_usd, p.percent_off, p.duration_weeks, p.start_hour, p.end_hour, ctx.rules.maxDiscountPct].filter(
+  const extra = [p.value_usd, p.percent_off, p.visits_required, p.duration_weeks, p.start_hour, p.end_hour, ctx.rules.maxDiscountPct].filter(
     (x): x is number => typeof x === "number",
   );
   problems.push(...checkTextNumbers(`${p.title} ${p.why} ${p.expected_effect}`, log, extra));
@@ -95,21 +95,19 @@ export function checkProposal(p: Proposal, ctx: AnalystContext, log: ToolLog): s
   const priceCut = p.mechanic === "amount_off" || p.mechanic === "percent_off" || p.mechanic === "bundle_price";
   if (priceCut && brandSafe) problems.push("Price cuts aren't allowed until the owner confirms their brand allows local promotions.");
   if (priceCut && !ctx.rules.allowPercentOff) problems.push("The owner hasn't allowed price cuts.");
-  if ((p.mechanic === "free_item" || p.mechanic === "catering_promo") && !ctx.rules.allowFreeExtra) {
-    problems.push("The owner hasn't allowed free extras.");
-  }
+  if (p.mechanic === "bogo" && (!ctx.rules.allowBogo || brandSafe)) problems.push("The owner hasn't allowed buy-one-get-one.");
+  if ((p.mechanic === "free_item" || p.mechanic === "loyalty_reward") && !ctx.rules.allowFreeExtra) problems.push("The owner hasn't allowed free extras.");
+  if (p.mechanic === "loyalty_reward" && p.visits_required === undefined) problems.push("A loyalty reward needs visits_required.");
 
   // Generosity must fit the owner's discount limit.
   if (p.mechanic === "percent_off") {
     if (p.percent_off === undefined) problems.push("A % off offer needs percent_off.");
     else if (p.percent_off > ctx.rules.maxDiscountPct) problems.push(`${p.percent_off}% off is over the ${ctx.rules.maxDiscountPct}% limit.`);
-  } else if (p.mechanic !== "catering_promo") {
-    if (p.value_usd === undefined) {
-      problems.push("The offer's dollar value is missing, so we can't check it against the discount limit.");
-    } else {
-      const est = estimateOfferCost(ctx, { mechanic: p.mechanic, value_usd: p.value_usd });
-      if (est.within_limit === false) problems.push(`Worth ${est.value_pct_of_ticket}% of an average order, over the ${ctx.rules.maxDiscountPct}% limit.`);
-    }
+  } else if (p.value_usd === undefined) {
+    problems.push("The offer's dollar value is missing, so we can't check it against the discount limit.");
+  } else {
+    const est = estimateOfferCost(ctx, { mechanic: p.mechanic, value_usd: p.value_usd, visits_required: p.visits_required });
+    if (est.within_limit === false) problems.push(`Worth ${est.value_pct_of_ticket}% of an average order, over the ${ctx.rules.maxDiscountPct}% limit.`);
   }
 
   // The rationale is for the owner: it must say which of their reports it comes from.
@@ -119,7 +117,6 @@ export function checkProposal(p: Proposal, ctx: AnalystContext, log: ToolLog): s
   if (window && (p.start_hour < window.first || p.end_hour > window.last)) {
     problems.push(`Runs outside the hours the store has sales (${window.first}:00–${window.last}:00).`);
   }
-  if (p.audience === "catering_leads" && p.mechanic !== "catering_promo") problems.push("Offers for catering leads must be catering promotions.");
   return problems;
 }
 

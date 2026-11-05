@@ -3,7 +3,6 @@ import type { Restaurant } from "@prisma/client";
 import type { EventInfo, LeadInfo } from "@/lib/analyst";
 import { db } from "@/lib/db";
 import { type Insights, computeInsights } from "@/lib/insights";
-import { AiConfigError } from "@/lib/llm/types";
 import { nextPacificMidnight, pacificDay } from "@/lib/llm/usage";
 import type { ParsedReport } from "@/lib/reports";
 
@@ -13,7 +12,7 @@ import type { ParsedReport } from "@/lib/reports";
  *   reports ─▶ store brief (a few lines, numbers worked out here, not by the AI)
  *   Google Places + event APIs (already saved by the scan) ─▶ compact lists
  *
- * Deals, the top-20 catering picks and every pitch read from this instead of
+ * Offers, the catering picks and every pitch read from this instead of
  * the raw reports and API results, so each AI request carries only what it
  * needs. It's rebuilt the next day, or sooner if the reports, the scan or the
  * owner's rules change.
@@ -123,28 +122,17 @@ export async function clearDailyContext(restaurantId: string, now = new Date()) 
 
 /**
  * One DAILY job: build (or reuse) today's context, then ask the AI for the
- * customer deals and the top catering picks at the same time. Each part is
- * reused while its data is unchanged, so a retry only redoes what failed.
+ * in-store offers. The catering picks wait for the owner to ask for them
+ * (the "Suggest" button on the Leads page), and catering offers are decided
+ * per pitch, when the owner clicks Generate pitch.
  */
 export async function runDailyPlan(restaurantId: string, now = new Date()): Promise<string> {
-  // The picks need the area scan; when it finishes it starts this job again.
-  const scanning = await db.draftJob.findFirst({ where: { restaurantId, kind: "LEADS", status: { in: ["QUEUED", "RUNNING"] } } });
-  if (scanning) return "Waiting for the area scan; the plan runs when it's done.";
-
   const { progress, buildDraftsFor } = await import("@/lib/drafts");
-  const { suggestLeads } = await import("@/lib/leads");
-  await progress(restaurantId, "DAILY", "Reading your reports and the area scan…");
+  await progress(restaurantId, "DAILY", "Reading your reports…");
   const ctx = await dailyContext(restaurantId, now);
   if (!ctx) return "Restaurant not found.";
-  await progress(restaurantId, "DAILY", `Suggesting deals and picking the best of ${ctx.leads.length} businesses and ${ctx.events.length} events…`);
-  const [deals, picks] = await Promise.allSettled([buildDraftsFor(restaurantId), ctx.leads.length ? suggestLeads(restaurantId, now) : Promise.resolve("No businesses yet: scan your area.")]);
-
-  // A bad key stops everything; a busy AI makes the job try again later (finished parts are kept).
-  const failures = [deals, picks].flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
-  const fatal = failures.find((e) => e instanceof AiConfigError);
-  if (fatal) throw fatal;
-  if (failures.length) throw failures[0];
-  return `Deals: ${(deals as PromiseFulfilledResult<string>).value} Catering picks: ${(picks as PromiseFulfilledResult<string>).value}`;
+  await progress(restaurantId, "DAILY", "AI is studying your reports for in-store offers…");
+  return `Offers: ${await buildDraftsFor(restaurantId)}`;
 }
 
 /**

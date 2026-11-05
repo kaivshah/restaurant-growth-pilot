@@ -43,9 +43,6 @@ export interface LeadContext extends AnalystContext {
   brief?: string[];
 }
 
-export const OFFERS = ["free_cookie_platter", "free_drinks_tray", "free_delivery"] as const;
-/** Most pitches one scan puts in the inbox (AI picks plus top matches). */
-export const MAX_PITCHES = Math.max(1, Number(process.env.PITCHES_PER_SCAN ?? 15));
 /** How many businesses "AI suggests" recommends. */
 export const MAX_SUGGESTIONS = Math.max(1, Math.min(40, Number(process.env.AI_SUGGESTIONS ?? 20)));
 
@@ -150,7 +147,6 @@ export const Pitch = z.object({
   lead_id: z.string(),
   contact_id: z.string().optional(),
   event_id: z.string().optional(),
-  offer: z.enum(OFFERS),
   occasion: z.string().max(120).describe('What the food is for, e.g. "weekly team lunch" or "exhibitor lunch at the Biotech Summit"'),
   why: z.string().max(500),
   confidence: z.enum(["low", "medium", "high"]),
@@ -188,13 +184,12 @@ const SUBMIT_JSON = {
           lead_id: { type: "string" },
           contact_id: { type: "string" },
           event_id: { type: "string" },
-          offer: { type: "string", enum: [...OFFERS] },
           occasion: { type: "string" },
           why: { type: "string" },
           confidence: { type: "string", enum: ["low", "medium", "high"] },
           evidence: evidenceJson,
         },
-        required: ["lead_id", "offer", "occasion", "why", "confidence"],
+        required: ["lead_id", "occasion", "why", "confidence"],
         additionalProperties: false,
       },
     },
@@ -207,12 +202,12 @@ const SUBMIT_JSON = {
   additionalProperties: false,
 };
 
-export const LEAD_SYSTEM = `You help a small restaurant owner win catering orders. The first message lists the nearby businesses (from Google Places), upcoming local events and the owner's rules. Recommend the ${MAX_SUGGESTIONS} with the best chance of ordering catering. Don't write emails: the owner writes a pitch later, only for the ones they choose.
+export const LEAD_SYSTEM = `You help a small restaurant owner win catering orders. The first message lists the nearby businesses (from Google Places), upcoming local events, the owner's rules and a few facts about the store from its reports. Recommend the ${MAX_SUGGESTIONS} with the best chance of ordering catering. Don't choose an offer and don't write emails: when the owner clicks Generate pitch for one of them, the offer is worked out for that business from the store's analysis.
 
 How to choose:
 - Places where many people eat lunch together, close by: offices, coworking spaces, schools, clinics. More Google reviews suggests more people coming and going. A website means we can look up who orders food.
 - For events, recommend the event (event_id) with its venue's lead (venue_lead_id), ideally 10–30 days ahead, e.g. lunch for exhibitors, staff or teams. Skip events without a venue_lead_id.
-- Give each one an offer the owner's rules allow (free_cookie_platter, free_drinks_tray or free_delivery), a short occasion ("weekly team lunch") and one sentence on why.
+- Give each one a short occasion ("weekly team lunch", "exhibitor lunch at the Biotech Summit") and one or two sentences on why it is likely to order, citing the scan data (category, distance, reviews, attendance, date).
 - Leave out weak or risky ones; list a few in skipped with a reason.
 
 Reply by calling submit_pitches once, in this first reply. Don't call other tools.
@@ -251,8 +246,6 @@ export function checkPitch(p: Pitch, ctx: LeadContext, log: ToolLog): string[] {
       if (ev.venueLeadId !== lead.id) problems.push(`${lead.name} isn't the venue for ${ev.title}.`);
     }
   }
-  if ((p.offer === "free_cookie_platter" || p.offer === "free_drinks_tray") && !ctx.rules.allowFreeExtra) problems.push("The owner hasn't allowed free extras.");
-  if (p.offer === "free_delivery" && !ctx.rules.allowFreeDelivery) problems.push("The owner hasn't allowed free delivery.");
   problems.push(...checkEvidence(p.evidence, log));
   const text = `${p.occasion} ${p.why}`;
   problems.push(...checkTextNumbers(text, log), ...checkPlainNumbers(text, log));
@@ -273,7 +266,7 @@ export async function runLeadAnalysis(model: AnalystModel, ctx: LeadContext, lim
     prefetchTools: LEAD_TOOLS,
     prefetch: [{ name: "get_rules" }, { name: "get_store_brief" }, { name: "list_leads" }, { name: "get_local_events" }],
     oneShot: true,
-    submit: { name: "submit_pitches", description: "Submit the recommended businesses and events, with an offer each, and the ones you skipped.", jsonSchema: SUBMIT_JSON, schema: LeadSubmission },
+    submit: { name: "submit_pitches", description: "Submit the recommended businesses and events, with an occasion and reason each, and the ones you skipped.", jsonSchema: SUBMIT_JSON, schema: LeadSubmission },
     // One request, plus one more only if the answer needs fixing.
     limits: { maxTurns: 2, ...limits },
   });
@@ -293,44 +286,4 @@ export async function runLeadAnalysis(model: AnalystModel, ctx: LeadContext, lim
   }
   out.skipped = res.submission.skipped.filter((s) => ctx.leads.some((l) => l.id === s.lead_id));
   return out;
-}
-
-/**
- * Without an AI analyst, or to top up its picks: event venues first, then
- * the best-scored leads, with the default offer. Leads in exclude are left out.
- */
-export function defaultPitches(ctx: LeadContext, opts: { exclude?: Set<string>; limit?: number } = {}): Pitch[] {
-  const offer = ctx.rules.allowFreeExtra ? "free_cookie_platter" : ctx.rules.allowFreeDelivery ? "free_delivery" : null;
-  const limit = opts.limit ?? MAX_PITCHES;
-  if (!offer || limit <= 0) return [];
-  const open = (id: string) => !opts.exclude?.has(id) && ctx.leads.some((l) => l.id === id && (l.status === "NEW" || l.status === "DRAFTED"));
-  const taken = new Set<string>();
-  const eventPitches: Pitch[] = [];
-  for (const e of ctx.events) {
-    if (eventPitches.length >= Math.min(2, limit) || !e.venueLeadId || !open(e.venueLeadId) || taken.has(e.venueLeadId)) continue;
-    taken.add(e.venueLeadId);
-    eventPitches.push({
-      lead_id: e.venueLeadId,
-      event_id: e.id,
-      contact_id: ctx.leads.find((l) => l.id === e.venueLeadId)?.contacts[0]?.id,
-      offer,
-      occasion: `Catering for ${e.title}`,
-      why: e.reasons.join(". "),
-      confidence: "medium",
-      evidence: [],
-    });
-  }
-  const leadPitches: Pitch[] = ctx.leads
-    .filter((l) => open(l.id) && !taken.has(l.id))
-    .slice(0, limit - eventPitches.length)
-    .map((l) => ({
-      lead_id: l.id,
-      contact_id: l.contacts[0]?.id,
-      offer,
-      occasion: "Team lunches",
-      why: l.reasons.join(". "),
-      confidence: "medium",
-      evidence: [],
-    }));
-  return [...eventPitches, ...leadPitches];
 }

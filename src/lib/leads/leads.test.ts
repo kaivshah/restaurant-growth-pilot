@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fakeLeadAnalyst } from "@/lib/analyst/leads/fake";
-import { type LeadContext, type Pitch, checkPitch, defaultPitches, runLeadAnalysis } from "@/lib/analyst/leads";
+import { type CateringContext, type CateringOffer, checkCateringOffer, decideCateringOffers } from "@/lib/analyst/catering";
+import { type LeadContext, type Pitch, checkPitch, runLeadAnalysis } from "@/lib/analyst/leads";
+import type { AnalystModel } from "@/lib/analyst/models";
 import type { ToolLog } from "@/lib/analyst/verify";
 import { fromHunterDomainSearch, rankContacts } from "@/lib/contacts";
 import { type LocalEvent, fromPredictHq, fromTicketmaster } from "@/lib/events";
@@ -209,7 +211,6 @@ const log: ToolLog = [{ id: "t1", name: "list_leads", input: {}, output: { leads
 const pitch = (over: Partial<Pitch> = {}): Pitch => ({
   lead_id: "L1",
   contact_id: "C1",
-  offer: "free_cookie_platter",
   occasion: "Weekly team lunches",
   why: "Close by, with an office manager we can reach.",
   confidence: "high",
@@ -227,11 +228,6 @@ describe("lead analyst checks", () => {
     expect(checkPitch(pitch(), leadCtx({ status: "EXCLUDED" }), log).join(" ")).toMatch(/excluded/);
     expect(checkPitch(pitch(), leadCtx({ status: "APPROVED" }), log).join(" ")).toMatch(/already approved/);
     expect(checkPitch(pitch({ contact_id: "C9" }), leadCtx(), log).join(" ")).toMatch(/contact/);
-  });
-
-  it("rejects offers the owner hasn't allowed", () => {
-    expect(checkPitch(pitch(), leadCtx({ rules: { allowFreeExtra: false } }), log).join(" ")).toMatch(/free extras/);
-    expect(checkPitch(pitch({ offer: "free_delivery" }), leadCtx({ rules: { allowFreeDelivery: false } }), log).join(" ")).toMatch(/free delivery/);
   });
 
   it("rejects invented numbers and wrong citations", () => {
@@ -259,21 +255,76 @@ describe("lead analyst run", () => {
     expect(out.rejected[0].reasons[0]).toMatch(/no lead/);
     expect(out.skipped.map((s) => s.lead_id)).toEqual(["L3"]);
   });
-
-  it("without an analyst, pitches event venues and the best leads with the default offer", () => {
-    const pitches = defaultPitches(leadCtx());
-    expect(pitches[0]).toMatchObject({ lead_id: "L2", event_id: "E1", offer: "free_cookie_platter" });
-    expect(pitches.map((p) => p.lead_id)).toEqual(["L2", "L1", "L3"]);
-    expect(defaultPitches(leadCtx({ rules: { allowFreeExtra: false } }))[0].offer).toBe("free_delivery");
-    expect(defaultPitches(leadCtx({ rules: { allowFreeExtra: false, allowFreeDelivery: false } }))).toEqual([]);
-  });
 });
 
-describe("default picks", () => {
-  it("respects the limit and exclusions", () => {
-    const ctx = leadCtx();
-    expect(defaultPitches(ctx, { limit: 1 })).toHaveLength(1);
-    expect(defaultPitches(ctx, { exclude: new Set(["L1", "L2", "L3"]) })).toEqual([]);
+describe("catering offers decided by the AI", () => {
+  const cctx = (rules: Partial<LeadContext["rules"]> = {}): CateringContext => {
+    const base = leadCtx({ rules });
+    return {
+      ...base,
+      brief: ["Catering is 4% of sales ($250 a week)."],
+      findings: [{ title: "Afternoons are slow", detail: "3 pm brings in $700 a week against $4,200 at 12 pm." }],
+      approvedOffers: [],
+      targets: [
+        { key: "t1", lead: base.leads[0], event: null, pick: { occasion: "Weekly team lunches", why: "An office 0.8 mi away." } },
+        { key: "t2", lead: base.leads[1], event: base.events[0], pick: null },
+      ],
+    };
+  };
+  const offer = (over: Partial<CateringOffer> = {}): CateringOffer => ({
+    key: "t1",
+    title: "15% off your first catering order",
+    mechanic: "percent_off",
+    percent_off: 15,
+    min_people: 10,
+    occasion: "Weekly team lunches",
+    selling_points: ["Delivered from 0.8 mi away"],
+    why: "Your WISR Sales Summary shows catering is only 4% of sales, and the scan shows an office 0.8 mi away: a first-order discount wins a regular lunch order.",
+    confidence: "high",
+    evidence: [],
+    ...over,
+  });
+  const clog: ToolLog = [
+    { id: "data_1_get_store_analysis", name: "get_store_analysis", input: {}, output: { figures: [4, 250, 700, 4200] } },
+    { id: "data_2_list_pitch_targets", name: "list_pitch_targets", input: {}, output: { targets: [{ distance_miles: 0.8 }, { distance_miles: 1.7, attendance: 1200 }] } },
+  ];
+
+  it("accepts any deal type the rules allow, within the discount limit", () => {
+    expect(checkCateringOffer(offer(), cctx({ promoApproval: "YES" }), clog)).toEqual([]);
+    expect(checkCateringOffer(offer({ percent_off: 30, title: "30% off your first catering order" }), cctx({ promoApproval: "YES" }), clog).join(" ")).toMatch(/over the 15% limit/);
+    expect(checkCateringOffer(offer(), cctx({ promoApproval: "UNSURE" }), clog).join(" ")).toMatch(/price cuts/);
+    expect(checkCateringOffer(offer({ mechanic: "free_delivery", percent_off: undefined, title: "Free delivery on your first order" }), cctx({ allowFreeDelivery: false }), clog).join(" ")).toMatch(/free delivery/);
+  });
+
+  it("needs a reason that names the report or scan, real numbers and the smallest order", () => {
+    const ctx = cctx({ promoApproval: "YES" });
+    expect(checkCateringOffer(offer({ why: "They will like it." }), ctx, clog).join(" ")).toMatch(/which report/);
+    expect(checkCateringOffer(offer({ selling_points: ["Loved by 5,000 locals"] }), ctx, clog).join(" ")).toMatch(/5,000/);
+    expect(checkCateringOffer(offer({ min_people: 4 }), ctx, clog).join(" ")).toMatch(/smallest catering order is 10/);
+  });
+
+  it("decides one offer per business in one request, and asks again for the ones that failed", async () => {
+    let call = 0;
+    const model: AnalystModel = {
+      provider: "test",
+      model: "scripted",
+      start: () => ({
+        send: async () => {
+          call++;
+          const offers =
+            call === 1
+              ? [offer(), offer({ key: "t2", title: "40% off catering for the Biotech Summit", percent_off: 40, occasion: "Exhibitor lunch" })]
+              : [offer({ key: "t2", title: "A free cookie platter with your Biotech Summit order", mechanic: "free_item", percent_off: undefined, value_usd: 15, occasion: "Exhibitor lunch", why: "The scan shows 1200 expected at the Biotech Summit, so a free platter with a big order fits." })];
+          return { toolCalls: [{ id: `s${call}`, name: "submit_catering_offers", input: { offers } }], text: "", inputTokens: 1, outputTokens: 1 };
+        },
+      }),
+    };
+    const out = await decideCateringOffers(model, cctx({ promoApproval: "YES", maxDiscountPct: 15 }));
+    expect(call).toBe(2);
+    expect(out.status).toBe("DONE");
+    expect(out.offers.get("t1")?.mechanic).toBe("percent_off");
+    expect(out.offers.get("t2")?.mechanic).toBe("free_item");
+    expect(out.rejected).toEqual([]);
   });
 });
 

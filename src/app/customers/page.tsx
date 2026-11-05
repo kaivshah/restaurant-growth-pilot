@@ -67,7 +67,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Pr
               </>
             ) : (
               <>
-                Approve the &ldquo;welcome&rdquo; offer in the <Link href="/inbox">Approval Inbox</Link> to give new sign-ups a free cookie code.
+                When the AI suggests a sign-up gift in the <Link href="/inbox">Approval Inbox</Link>, approve it and every new sign-up gets its code by email.
               </>
             )}
           </p>

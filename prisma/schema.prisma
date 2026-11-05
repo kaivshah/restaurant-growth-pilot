@@ -80,12 +80,12 @@ model Restaurant {
   minCateringOrder     Int             @default(10)
   openingHours         String?
   // Brand rules (setup step 4)
-  promoApproval        PromoApproval   @default(UNSURE)
-  maxDiscountPct       Int             @default(15)
+  promoApproval        PromoApproval   @default(YES)
+  maxDiscountPct       Int             @default(25)
   allowFreeExtra       Boolean         @default(true)
   allowFreeDelivery    Boolean         @default(true)
   allowPercentOff      Boolean         @default(true)
-  allowBogo            Boolean         @default(false)
+  allowBogo            Boolean         @default(true)
   useBrandCateringMenu Boolean         @default(true)
   setupCompletedAt     DateTime?
   outlets              Outlet[]

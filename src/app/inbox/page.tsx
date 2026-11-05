@@ -176,7 +176,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           ) : (
             <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
               <section aria-label="Offer ideas" className="flex flex-col gap-3">
-                <p className="text-sm font-semibold text-muted">Start with the welcome offer: it builds your customer list</p>
+                <p className="text-sm font-semibold text-muted">Offers the AI built from your reports, strongest first: to attract customers, grow sales and bring them back</p>
                 {drafts.map((x) => {
                   const active = x.id === selected?.id;
                   return (

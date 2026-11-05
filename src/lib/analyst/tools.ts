@@ -384,13 +384,14 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
   tool({
     name: "estimate_offer_cost",
     description:
-      "How generous an offer is: its value as a % of the average ticket, which must stay within the owner's limit. For a free item give its retail value if known (e.g. average_drink_price from get_week_summary); for $ off give the amount; for % off give the percent.",
+      "How generous an offer is: its value as a % of the average ticket, which must stay within the owner's limit. For a free item or buy-one-get-one give the free item's retail value (e.g. average_drink_price or average_sandwich_price from get_week_summary); for $ off give the amount; for % off give the percent; for a loyalty reward give its value and visits_required (the cost is spread over those visits).",
     inputSchema: {
       type: "object",
       properties: {
-        mechanic: { type: "string", enum: ["free_item", "amount_off", "percent_off", "bundle_price"] },
+        mechanic: { type: "string", enum: ["free_item", "amount_off", "percent_off", "bundle_price", "bogo", "loyalty_reward"] },
         value_usd: { type: "number", description: "Retail value of the free item, or the dollars off" },
         percent_off: { type: "number" },
+        visits_required: { type: "integer", minimum: 2, maximum: 12 },
       },
       required: ["mechanic"],
       additionalProperties: false,
@@ -398,9 +399,10 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
     parse: (i) =>
       z
         .object({
-          mechanic: z.enum(["free_item", "amount_off", "percent_off", "bundle_price"]),
+          mechanic: z.enum(["free_item", "amount_off", "percent_off", "bundle_price", "bogo", "loyalty_reward"]),
           value_usd: z.number().nonnegative().optional(),
           percent_off: z.number().min(0).max(100).optional(),
+          visits_required: z.number().int().min(2).max(12).optional(),
         })
         .parse(i),
     run: (ctx, args) => estimateOfferCost(ctx, args),
@@ -507,7 +509,7 @@ function salesMix(ctx: AnalystContext) {
 
 export function estimateOfferCost(
   ctx: AnalystContext,
-  args: { mechanic: string; value_usd?: number; percent_off?: number },
+  args: { mechanic: string; value_usd?: number; percent_off?: number; visits_required?: number },
 ): { source: string; value_pct_of_ticket: number | null; max_discount_pct: number; within_limit: boolean | null; note?: string } {
   const units = pick(ctx, "wisrUnits");
   const ticket = units?.averageTicket ?? null;
@@ -519,7 +521,9 @@ export function estimateOfferCost(
   if (args.value_usd === undefined || !ticket) {
     return { ...base, value_pct_of_ticket: null, within_limit: null, note: ticket ? "Give value_usd." : "Average ticket unknown." };
   }
-  const pct = r1((args.value_usd / ticket) * 100);
+  // A loyalty reward is earned over several visits, so its cost is spread over them.
+  const visits = args.mechanic === "loyalty_reward" ? Math.max(1, args.visits_required ?? 1) : 1;
+  const pct = r1((args.value_usd / (ticket * visits)) * 100);
   return { ...base, value_pct_of_ticket: pct, within_limit: pct <= ctx.rules.maxDiscountPct };
 }
 

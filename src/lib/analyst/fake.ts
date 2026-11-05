@@ -3,7 +3,7 @@ import type { AnalystModel, ToolCall, ToolResult } from "./models";
 /**
  * A scripted stand-in for a real model, used by tests and by local runs with
  * ANALYST_PROVIDER=fake. It explores like a real analyst would, then submits
- * one finding, one valid proposal and one that breaks the rules, so every
+ * one finding, three valid proposals and one that breaks the rules, so every
  * part of the pipeline (tools, checks, inbox) can be exercised offline.
  */
 export function fakeAnalyst(): AnalystModel {
@@ -52,6 +52,7 @@ export function fakeAnalyst(): AnalystModel {
                 {
                   title: "Free chips with any footlong, 7–9 pm",
                   target: "slow_hours",
+                  goal: "grow_sales",
                   mechanic: "free_item",
                   item: "chips",
                   qualifying_purchase: "any footlong",
@@ -70,9 +71,55 @@ export function fakeAnalyst(): AnalystModel {
                     { tool_call_id: week.id, field: "drink_attach_pct", value: drinkPct, label: "Orders with a drink" },
                   ],
                 },
+                ...(typeof week.output.customers === "number" && typeof week.output.average_sandwich_price === "number"
+                  ? [
+                      {
+                        title: "Free 6-inch sub after 6 visits",
+                        target: "retain_regulars",
+                        goal: "retain",
+                        mechanic: "loyalty_reward",
+                        item: "6-inch sub",
+                        qualifying_purchase: "any meal, 6 times",
+                        value_usd: week.output.average_sandwich_price,
+                        visits_required: 6,
+                        days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                        start_hour: 10,
+                        end_hour: 21,
+                        duration_weeks: 8,
+                        audience: "email_list",
+                        why: `Your WISR Units Summary shows about ${week.output.customers} customers a week but no way to bring them back; a reward on the 6th visit gives regulars a reason to return.`,
+                        expected_effect: "More repeat visits from the email list; count rewards earned.",
+                        confidence: "medium",
+                        evidence: [
+                          { tool_call_id: week.id, field: "customers", value: week.output.customers, label: "Customers a week" },
+                          { tool_call_id: week.id, field: "average_sandwich_price", value: week.output.average_sandwich_price, label: "Average sandwich price" },
+                        ],
+                      },
+                      {
+                        title: "Free cookie for joining our email list",
+                        target: "new_customers",
+                        goal: "attract",
+                        mechanic: "free_item",
+                        item: "cookie",
+                        qualifying_purchase: "none",
+                        value_usd: 1,
+                        for_sign_up: true,
+                        days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                        start_hour: 10,
+                        end_hour: 21,
+                        duration_weeks: 8,
+                        audience: "in_store_qr",
+                        why: `Your WISR Units Summary shows about ${week.output.customers} customers a week, none of them on a list yet; a small sign-up gift starts the list the other offers are sent to.`,
+                        expected_effect: "Sign-ups per week.",
+                        confidence: "medium",
+                        evidence: [{ tool_call_id: week.id, field: "customers", value: week.output.customers, label: "Customers a week" }],
+                      },
+                    ]
+                  : []),
                 {
                   title: "20% off every footlong on Sundays",
                   target: "slow_days",
+                  goal: "attract",
                   mechanic: "percent_off",
                   item: "footlong",
                   qualifying_purchase: "none",
@@ -88,11 +135,7 @@ export function fakeAnalyst(): AnalystModel {
                   evidence: [{ tool_call_id: week.id, field: "net_sales", value: 99999, label: "Net sales" }],
                 },
               ],
-              baseline_decisions: [
-                { key: "welcome", action: "keep", reason: "There is no customer list yet, so building one comes first." },
-                { key: "afternoon-drink", action: "keep", reason: "Drink attach is low and the afternoon dip is real." },
-                { key: "weekend-bread", action: "drop", reason: "The evening offer is a better use of the budget this month." },
-              ],
+              baseline_decisions: [],
             }),
           ]);
         },
