@@ -50,9 +50,10 @@ export function fakeAnalyst(): AnalystModel {
               ],
               proposals: [
                 {
-                  title: "Free cookie with any footlong, 7–9 pm",
+                  title: "Free chips with any footlong, 7–9 pm",
+                  target: "slow_hours",
                   mechanic: "free_item",
-                  item: "cookie",
+                  item: "chips",
                   qualifying_purchase: "any footlong",
                   value_usd: 1,
                   days: ["Mon", "Tue", "Wed", "Thu"],
@@ -71,6 +72,7 @@ export function fakeAnalyst(): AnalystModel {
                 },
                 {
                   title: "20% off every footlong on Sundays",
+                  target: "slow_days",
                   mechanic: "percent_off",
                   item: "footlong",
                   qualifying_purchase: "none",

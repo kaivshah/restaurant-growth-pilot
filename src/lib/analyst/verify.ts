@@ -133,3 +133,15 @@ export function similar(a: string, b: string) {
   const shared = [...A].filter((w) => B.has(w)).length;
   return shared / Math.min(A.size, B.size) >= 0.75;
 }
+
+/**
+ * The thing given away, reduced to one word so "Free chocolate chip cookie",
+ * "cookies" and "a cookie" all match: the last meaningful word, singular.
+ */
+export function itemKey(item: string): string {
+  const words = item.toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter((w) => w && !["free", "a", "an", "the", "any", "one", "of", "with", "bag", "regular", "small", "large"].includes(w));
+  const last = words.at(-1) ?? item.toLowerCase();
+  const drink = /drink|soda|fountain|beverage/.test(item.toLowerCase());
+  if (drink) return "drink";
+  return last.replace(/s$/, "");
+}

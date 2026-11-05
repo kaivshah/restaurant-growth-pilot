@@ -24,7 +24,7 @@ export interface ToolDef<A = unknown, C = AnalystContext> extends ToolSpec {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
-const WEEK = { type: "string", description: "Week end date (yyyy-mm-dd) from list_reports. Omit for the latest week." };
+const WEEK = { type: "string", description: "Week end date (yyyy-mm-dd) from list_reports, for that one week. Omit for the weekly average of the latest weeks (up to 8)." };
 const noData = (what: string) => ({ error: `No ${what} uploaded yet.` });
 
 /** Typed while defining, erased in the list: parse() always runs before run(). */
@@ -54,7 +54,7 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
   tool({
     name: "get_week_summary",
     description:
-      "Weekly sales and customer numbers from the WISR sales, units and discount reports: net sales, unit/drink/misc/catering sales, footlong and 6-inch counts, customers, average ticket, drink attach %, discounts, and cost of goods %.",
+      "Weekly sales and customer numbers from the WISR sales, units and discount reports (a typical week: the average of the latest weeks, unless `week` is given): net sales, unit/drink/misc/catering sales, footlong and 6-inch counts, customers, units per customer, average ticket, average sandwich price, drink attach %, discounts, and cost of goods %.",
     inputSchema: { type: "object", properties: { week: WEEK }, additionalProperties: false },
     parse: (i) => weekArg.parse(i ?? {}),
     run: (ctx, { week }) => {
@@ -65,6 +65,7 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
       return {
         source: [sales, units, cogs].filter(Boolean).map((r) => sourceLabel(r as ParsedReport)),
         week_end: sales?.period?.end ?? units?.period?.end ?? null,
+        weeks_averaged: (sales as { weeksAveraged?: number } | undefined)?.weeksAveraged ?? 1,
         net_sales: sales?.netSales ?? null,
         unit_sales: sales?.unitSales ?? null,
         drink_sales: sales?.drinkSales ?? null,
@@ -77,8 +78,10 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
         six_inch: units?.sixInch ?? null,
         salads: units?.salads ?? null,
         total_units: units?.totalUnits ?? null,
-        customers: units?.customers ?? null,
+        customers: units ? Math.round(units.customers) : null,
+        units_per_customer: units?.unitsPerCustomer ?? null,
         average_ticket: units?.averageTicket ?? null,
+        average_sandwich_price: sales && units && units.totalUnits ? r2(sales.unitSales / units.totalUnits) : null,
         drinks_sold: units?.drinks ?? null,
         drink_attach_pct: units?.drinkPct ?? null,
         average_drink_price: sales && units && units.drinks ? r2(sales.drinkSales / units.drinks) : null,
@@ -152,6 +155,24 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
         week_customers: dp.weekTotal.customers,
       };
     },
+  }),
+
+  tool({
+    name: "get_weekly_trend",
+    description:
+      "Week by week, oldest first (up to 8 weeks): net sales, customers, average ticket, drink attach %, catering sales, discounts % and day-part sales, plus the change from the first to the last week. Use it to see what is rising or falling.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parse: () => ({}),
+    run: (ctx) => weeklyTrend(ctx),
+  }),
+
+  tool({
+    name: "get_sales_mix",
+    description:
+      "What customers buy, as a typical week: footlongs, 6-inch, 3-inch, salads, pizza and other units with their share, catering by type (giant subs, platters, boxed meals, dessert platters), and the add-on items used most (sides, cookies, chips, drinks) with their unit cost, from the WISR units and inventory items reports.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parse: () => ({}),
+    run: (ctx) => salesMix(ctx),
   }),
 
   tool({
@@ -351,6 +372,77 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
     run: (ctx, args) => estimateOfferCost(ctx, args),
   }),
 ];
+
+const TREND_LIMIT = 8;
+
+function weeklyTrend(ctx: AnalystContext) {
+  const ends = [...new Set([...weeksOf(ctx, "wisrSales"), ...weeksOf(ctx, "wisrUnits"), ...weeksOf(ctx, "dayPart")])].sort().slice(-TREND_LIMIT);
+  if (!ends.length) return noData("weekly report");
+  const rows = ends.map((week) => {
+    const s = pick(ctx, "wisrSales", week);
+    const u = pick(ctx, "wisrUnits", week);
+    const c = pick(ctx, "wisrAdjCogs", week);
+    const d = pick(ctx, "dayPart", week);
+    return {
+      week_end: week,
+      net_sales: s?.netSales ?? null,
+      customers: u?.customers ?? null,
+      average_ticket: u?.averageTicket ?? null,
+      drink_attach_pct: u?.drinkPct ?? null,
+      catering_sales: s?.cateringSales ?? null,
+      discounts_pct_of_sales: c?.discountPctOfSales ?? null,
+      daypart_sales: d ? r2(d.weekTotal.sales) : null,
+    };
+  });
+  const metrics = ["net_sales", "customers", "average_ticket", "drink_attach_pct", "catering_sales", "discounts_pct_of_sales", "daypart_sales"] as const;
+  const change_first_to_last_pct: Record<string, number | null> = {};
+  for (const m of metrics) {
+    const vals = rows.map((r) => r[m]).filter((v): v is number => typeof v === "number");
+    change_first_to_last_pct[m] = vals.length >= 2 && vals[0] ? r1(((vals.at(-1)! - vals[0]) / Math.abs(vals[0])) * 100) : null;
+  }
+  return { source: `Your weekly reports, ${ends[0]} to ${ends.at(-1)}`, weeks: rows.length, rows, change_first_to_last_pct };
+}
+
+const ADD_ON = /cookie|chip|drink|cup|bottle|water|soda|juice|dessert|brownie|side|apple|soup|kids|bag/i;
+
+function salesMix(ctx: AnalystContext) {
+  const units = pick(ctx, "wisrUnits");
+  const items = pick(ctx, "wisrInventoryItems");
+  if (!units && !items) return noData("WISR units or inventory items report");
+  const total = units?.totalUnits ?? 0;
+  const share = (n: number) => (total ? r1((n / total) * 100) : null);
+  const mix = units
+    ? [
+        ["footlong", units.footlong],
+        ["six_inch", units.sixInch],
+        ["three_inch", units.threeInch],
+        ["salads", units.salads],
+        ["pizza", units.pizza],
+        ["other", units.otherUnits],
+      ]
+        .filter(([, n]) => (n as number) > 0)
+        .map(([name, n]) => ({ item: name as string, units: Math.round(n as number), share_pct: share(n as number) }))
+    : [];
+  const catering = units
+    ? Object.entries(units.catering).map(([kind, v]) => ({ kind, quantity: r1(v.qty), dollars: r2(v.dollars) }))
+    : [];
+  const addOns = items
+    ? items.items
+        .filter((i) => !i.isSubtotal && ADD_ON.test(i.item) && (i.used ?? 0) > 0)
+        .sort((a, b) => (b.usedDollars ?? 0) - (a.usedDollars ?? 0))
+        .slice(0, 12)
+        .map((i) => ({ item: i.item, used_per_week: r1(i.used ?? 0), unit_cost: i.unitCost, used_dollars: i.usedDollars === null ? null : r2(i.usedDollars) }))
+    : [];
+  return {
+    source: [units, items].filter(Boolean).map((r) => sourceLabel(r as ParsedReport)),
+    total_units: total ? Math.round(total) : null,
+    customers: units ? Math.round(units.customers) : null,
+    units_per_customer: units?.unitsPerCustomer ?? null,
+    sandwich_mix: mix,
+    catering_by_type: catering,
+    add_on_items: addOns,
+  };
+}
 
 export function estimateOfferCost(
   ctx: AnalystContext,

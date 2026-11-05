@@ -5,7 +5,7 @@ import type { AnalystModel } from "./models";
 import { ANALYST_SYSTEM, MAX_PROPOSALS, analystRequest } from "./prompt";
 import { type BaselineDecision, type Finding, type Proposal, SUBMIT_SCHEMA, Submission } from "./schema";
 import { DATA_TOOLS } from "./tools";
-import { type ToolLog, checkFinding, checkProposal, similar } from "./verify";
+import { type ToolLog, checkFinding, checkProposal, itemKey, similar } from "./verify";
 
 export type { RunLimits } from "./loop";
 
@@ -54,6 +54,9 @@ export async function runAnalysis(
       { name: "get_week_summary" },
       { name: "get_hourly_sales" },
       { name: "get_day_totals" },
+      { name: "get_weekly_trend" },
+      { name: "get_sales_mix" },
+      { name: "get_discount_breakdown" },
       { name: "get_past_decisions" },
     ],
     submit: {
@@ -98,15 +101,29 @@ function verifySubmission(
   }
 
   const taken = [...existingTitles];
+  // Standard ideas the AI keeps still use up their item: no second free cookie next to the welcome cookie.
+  const replacedOrDropped = new Set([
+    ...sub.proposals.map((p) => p.baseline_key).filter(Boolean),
+    ...sub.baseline_decisions.filter((d) => d.action !== "keep").map((d) => d.key),
+  ]);
+  const items = new Map<string, string>();
+  for (const b of baseline) if (b.item && !replacedOrDropped.has(b.key)) items.set(itemKey(b.item), b.title);
+  const targets = new Map<string, string>();
   for (const p of sub.proposals.slice(0, MAX_PROPOSALS)) {
     const problems = checkProposal(p, ctx, log);
     const dup = taken.find((t) => similar(t, p.title));
     if (dup) problems.push(`Too similar to "${dup}".`);
     if (p.baseline_key && !baseline.some((b) => b.key === p.baseline_key)) problems.push(`There is no standard idea "${p.baseline_key}".`);
+    const sameItem = items.get(itemKey(p.item));
+    if (sameItem) problems.push(`Gives away the same item as "${sameItem}"; each idea needs a different item.`);
+    const sameTarget = targets.get(p.target);
+    if (sameTarget) problems.push(`Fixes the same problem (${p.target}) as "${sameTarget}".`);
     if (problems.length) out.rejected.push({ kind: "proposal", title: p.title, reasons: problems });
     else {
       out.proposals.push(p);
       taken.push(p.title);
+      items.set(itemKey(p.item), p.title);
+      targets.set(p.target, p.title);
     }
   }
 

@@ -102,18 +102,25 @@ function averageOf(xs: unknown[]): unknown {
  * period covering them all. Falls back to the newest week when the weeks
  * can't be lined up (for example a different list of inventory items).
  */
-function latest<T extends ParsedReport["type"]>(reports: ParsedReport[], type: T): Extract<ParsedReport, { type: T }> | undefined {
+export function averagedReport<T extends ParsedReport["type"]>(
+  reports: ParsedReport[],
+  type: T,
+): Extract<ParsedReport, { type: T }> | undefined {
   const weeks = recentWeeks(reports, type);
   if (weeks.length <= 1) return weeks[0];
   try {
-    const avg = averageOf(weeks) as Extract<ParsedReport, { type: T }>;
+    // Dates differ week to week by definition; average everything else.
+    const avg = averageOf(weeks.map((w) => ({ ...w, period: null }))) as Extract<ParsedReport, { type: T }>;
     const start = weeks.at(-1)!.period?.start ?? null;
     const end = weeks[0].period?.end ?? null;
-    return { ...avg, period: start && end ? { start, end } : weeks[0].period } as Extract<ParsedReport, { type: T }>;
+    // weeksAveraged: read by the analyst's source labels ("weekly average of 6 weeks").
+    return { ...avg, period: start && end ? { start, end } : weeks[0].period, weeksAveraged: weeks.length } as Extract<ParsedReport, { type: T }>;
   } catch {
     return weeks[0];
   }
 }
+
+const latest = averagedReport;
 
 function shortHour(h: number) {
   if (h === 0) return "12a";

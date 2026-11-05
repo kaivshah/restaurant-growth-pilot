@@ -40,6 +40,8 @@ export interface OfferCandidate {
   facts: string[];
   /** Whether the message must include the [CODE] placeholder */
   needsCode: boolean;
+  /** What is given away, for rule ideas, so the AI doesn't propose the same item again */
+  item?: string;
   evidence: OfferEvidence | null;
 }
 
@@ -74,6 +76,7 @@ function welcome(ins: Insights): OfferCandidate {
     measure: "Sign-ups per week",
     checks: ["Free extra, no price cut", "One per customer", "Unsubscribe link in every email"],
     copyLabel: "QR card headline",
+    item: "cookie",
     facts: ["Free cookie for joining the email list", "One per customer", "Code sent by email after sign-up"],
     needsCode: false,
     evidence: null,
@@ -113,6 +116,7 @@ function afternoonDrink(ins: Insights, rules: OfferRules): OfferCandidate | null
     measure: "Uses, and 3–5 pm sales vs. now",
     checks: [`Within your ${rules.maxDiscountPct}% limit`, "Unique redemption code", "Ends after 4 weeks"],
     copyLabel: "Email subject",
+    item: "fountain drink",
     facts: [deal, "Monday to Friday, 3 to 5 pm", "Valid for 4 weeks", "Show the code at the counter"],
     needsCode: true,
     evidence: {
@@ -148,6 +152,7 @@ function weekendBread(ins: Insights, rules: OfferRules): OfferCandidate | null {
     measure: "Weekend sales and bread overage",
     checks: ["Free extra, no price cut", "Unique redemption code", "Ends after 2 weeks"],
     copyLabel: "Email subject",
+    item: "chips",
     facts: ["Free chips with any 6-inch sub", "Saturday to Monday", "Valid for 2 weeks", "Show the code at the counter"],
     needsCode: true,
     evidence: null,

@@ -109,6 +109,7 @@ describe("checks on what the AI submits", () => {
     const tlog: ToolLog = [{ id: "h", name: "get_hourly_sales", input: {}, output: hourly }];
     const base: Proposal = {
       title: "Free cookie with any footlong, 7–9 pm",
+      target: "slow_hours",
       mechanic: "free_item",
       item: "cookie",
       qualifying_purchase: "any footlong",
@@ -148,7 +149,7 @@ describe("a full analyst run (scripted model)", () => {
     expect(out.status).toBe("DONE");
     expect(out.toolCalls).toBe(4);
     expect(out.findings).toHaveLength(1);
-    expect(out.proposals.map((p) => p.title)).toEqual(["Free cookie with any footlong, 7–9 pm"]);
+    expect(out.proposals.map((p) => p.title)).toEqual(["Free chips with any footlong, 7–9 pm"]);
     const rejected = out.rejected.find((r) => r.title.startsWith("20% off"))!;
     expect(rejected.reasons.join(" ")).toMatch(/returned/); // invented 99999
     expect(rejected.reasons.join(" ")).toMatch(/brand allows/);
@@ -158,7 +159,7 @@ describe("a full analyst run (scripted model)", () => {
     expect(offer.evidence?.kind).toBe("citations");
 
     const merged = mergeIdeas(baseline, [offer], out);
-    expect(merged.map((o) => o.key)).toEqual(["welcome", "afternoon-drink", "ai-free-cookie-with-any-footlong-7-9-pm"]);
+    expect(merged.map((o) => o.key)).toEqual(["welcome", "afternoon-drink", "ai-free-chips-with-any-footlong-7-9-pm"]);
   });
 
   it("enforces the tool budget and fails cleanly when the model never submits", async () => {
@@ -214,5 +215,109 @@ describe.runIf(PRIVATE_FILES.every((f) => existsSync(join(PRIVATE, f))))("pilot 
     const out = await runAnalysis(fakeAnalyst(), ctx, []);
     expect(out.status).toBe("DONE");
     expect(out.proposals).toHaveLength(1);
+  });
+});
+
+describe("several weeks and varied offers", () => {
+  /** The sample week plus `n` later copies of it, with net sales and customers changed per week. */
+  async function weeks(n: number) {
+    const base = await load(SAMPLE, SAMPLE_FILES);
+    const out: ParsedReport[] = [...base];
+    for (let i = 1; i <= n; i++) {
+      for (const r of base) {
+        if (!r.period) continue;
+        const shift = (d: string) => new Date(Date.parse(d) + i * 7 * 86_400_000).toISOString().slice(0, 10);
+        const period = { start: shift(r.period.start), end: shift(r.period.end) };
+        if (r.type === "wisrSales") out.push({ ...r, period, netSales: r.netSales + i * 100 });
+        else if (r.type === "wisrUnits") out.push({ ...r, period, customers: r.customers - i * 10 });
+        else out.push({ ...r, period } as ParsedReport);
+      }
+    }
+    return out;
+  }
+
+  it("reads a weekly average by default, one week on request, and the trend", async () => {
+    const reports = await weeks(3);
+    const ctx = ctxFor(reports);
+    const one = run(ctxFor(await load(SAMPLE, SAMPLE_FILES)), "get_week_summary");
+    const avg = run(ctx, "get_week_summary");
+    expect(avg.weeks_averaged).toBe(4);
+    expect(avg.net_sales).toBe((one.net_sales as number) + 150); // +0, +100, +200, +300 over four weeks
+    expect(String((avg.source as string[])[0])).toMatch(/weekly average of 4 weeks/);
+    const firstWeek = run(ctx, "get_week_summary", { week: (one.week_end as string) });
+    expect(firstWeek.net_sales).toBe(one.net_sales);
+
+    const trend = run(ctx, "get_weekly_trend");
+    expect(trend.weeks).toBe(4);
+    expect((trend.change_first_to_last_pct as Record<string, number>).customers).toBeLessThan(0);
+    const mix = run(ctx, "get_sales_mix");
+    expect((mix.sandwich_mix as { item: string }[]).map((m) => m.item)).toContain("footlong");
+    expect(Array.isArray(mix.add_on_items)).toBe(true);
+  });
+
+  it("refuses a second giveaway of the same item, or a second offer for the same problem", async () => {
+    const ctx = ctxFor(await load(SAMPLE, SAMPLE_FILES));
+    const baseline = buildOffers(computeInsights(ctx.reports.map((r) => r.report)), ctx.rules);
+    const proposal = (title: string, item: string, target: Proposal["target"]) => ({
+      title,
+      target,
+      mechanic: "free_item",
+      item,
+      qualifying_purchase: "any footlong",
+      value_usd: 1,
+      days: ["Tue"],
+      start_hour: 15,
+      end_hour: 17,
+      duration_weeks: 2,
+      audience: "email_list",
+      why: "Tuesday afternoons are quiet.",
+      expected_effect: "More Tuesday afternoon orders.",
+      confidence: "medium",
+      evidence: [{ tool_call_id: "data_2_get_rules", field: "max_discount_pct", value: 15, label: "Discount limit" }],
+    });
+    const scripted: AnalystModel = {
+      provider: "test",
+      model: "scripted",
+      start: () => ({
+        send: async () => ({
+          toolCalls: [
+            {
+              id: "s",
+              name: "submit_analysis",
+              input: {
+                findings: [],
+                proposals: [
+                  proposal("Free chocolate chip cookie with a footlong on Tuesdays", "chocolate chip cookies", "slow_days"),
+                  proposal("Free chips with any footlong on Tuesdays", "a bag of chips", "slow_days"),
+                  proposal("Free chips with a footlong, 3–5 pm", "chips", "slow_hours"),
+                  proposal("Free apple slices with a kids meal at 3 pm", "apple slices", "add_ons"),
+                ],
+                baseline_decisions: [
+                  { key: "welcome", action: "keep", reason: "Build the list." },
+                  { key: "weekend-bread", action: "drop", reason: "Tuesdays matter more." },
+                ],
+              },
+            },
+          ],
+          text: "",
+          inputTokens: 1,
+          outputTokens: 1,
+        }),
+      }),
+    };
+    const out = await runAnalysis(scripted, ctx, baseline);
+    expect(out.status).toBe("DONE");
+    const why = (t: string) => out.rejected.find((r) => r.title.startsWith(t))?.reasons.join(" ") ?? "";
+    expect(why("Free chocolate chip cookie")).toMatch(/same item as "Free cookie when you join/);
+    expect(out.proposals.map((p) => p.title)).toEqual(["Free chips with any footlong on Tuesdays", "Free apple slices with a kids meal at 3 pm"]);
+    expect(why("Free chips with a footlong, 3–5 pm")).toMatch(/same item/);
+  });
+
+  it("treats different names for one item as the same item", async () => {
+    const { itemKey } = await import("./verify");
+    expect(itemKey("Free chocolate chip cookie")).toBe(itemKey("cookies"));
+    expect(itemKey("a bag of chips")).toBe(itemKey("chips"));
+    expect(itemKey("fountain drink")).toBe(itemKey("21 oz soda"));
+    expect(itemKey("cookies")).not.toBe(itemKey("chips"));
   });
 });

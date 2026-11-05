@@ -3,6 +3,18 @@ import { z } from "zod";
 export const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 export const MECHANICS = ["free_item", "amount_off", "percent_off", "bundle_price", "catering_promo"] as const;
 export const AUDIENCES = ["email_list", "in_store_qr", "email_and_qr", "catering_leads"] as const;
+/** The store problem an offer is meant to fix; each proposal must fix a different one. */
+export const TARGETS = [
+  "slow_hours",
+  "slow_days",
+  "drink_attach",
+  "add_ons",
+  "bigger_orders",
+  "falling_customers",
+  "new_customers",
+  "extra_stock",
+  "catering",
+] as const;
 
 const Evidence = z.object({
   tool_call_id: z.string().describe("The id of the tool call the number came from"),
@@ -18,7 +30,8 @@ export const Finding = z.object({
 });
 
 export const Proposal = z.object({
-  title: z.string().max(80).describe('Short name of the offer, e.g. "Free cookie with any footlong after 7 pm"'),
+  title: z.string().max(80).describe('Short name of the offer, e.g. "Free fountain drink with any footlong, Mon–Thu 3–5 pm"'),
+  target: z.enum(TARGETS).describe("The store problem this offer fixes"),
   mechanic: z.enum(MECHANICS),
   item: z.string().max(60).describe("What is free or discounted"),
   qualifying_purchase: z.string().max(80).describe('What the customer must buy, e.g. "any footlong", or "none"'),
@@ -90,6 +103,7 @@ export const SUBMIT_SCHEMA = {
         type: "object",
         properties: {
           title: { type: "string" },
+          target: { type: "string", enum: [...TARGETS] },
           mechanic: { type: "string", enum: [...MECHANICS] },
           item: { type: "string" },
           qualifying_purchase: { type: "string" },
@@ -106,7 +120,7 @@ export const SUBMIT_SCHEMA = {
           baseline_key: { type: "string" },
           evidence: evidenceJson,
         },
-        required: ["title", "mechanic", "item", "qualifying_purchase", "days", "start_hour", "end_hour", "duration_weeks", "audience", "why", "expected_effect", "confidence", "evidence"],
+        required: ["title", "target", "mechanic", "item", "qualifying_purchase", "days", "start_hour", "end_hour", "duration_weeks", "audience", "why", "expected_effect", "confidence", "evidence"],
         additionalProperties: false,
       },
     },
