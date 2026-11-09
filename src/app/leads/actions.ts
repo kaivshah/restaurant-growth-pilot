@@ -115,7 +115,7 @@ export async function queuePitches(formData: FormData) {
 /** The owner asks the AI to pick the businesses and events most likely to order catering. */
 export async function suggestAction() {
   const restaurant = await requireRestaurant();
-  await enqueueDraftJob(restaurant.id, "SUGGEST");
+  await enqueueDraftJob(restaurant.id, "SUGGEST", true);
   after(() => kickJobs());
   done();
 }

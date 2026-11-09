@@ -469,7 +469,7 @@ export type Suggestion = {
  * Nothing is drafted.
  * A run is reused while the leads, events and rules are unchanged.
  */
-export async function suggestLeads(restaurantId: string, now = new Date()): Promise<string> {
+export async function suggestLeads(restaurantId: string, now = new Date(), opts: { force?: boolean } = {}): Promise<string> {
   const restaurant = await db.restaurant.findUnique({ where: { id: restaurantId } });
   if (!restaurant) return "Restaurant not found.";
   const analyst = analystFromEnv("leads");
@@ -481,7 +481,8 @@ export async function suggestLeads(restaurantId: string, now = new Date()): Prom
     .update(JSON.stringify({ analyst: `${analyst.provider}:${analyst.model}`, leads: ctx.leads, events: ctx.events, rules: ctx.rules, restaurant: ctx.restaurant, decisions: ctx.pastDecisions }))
     .digest("hex");
   const previous = await db.analysisRun.findFirst({ where: { restaurantId, purpose: "leads", dataHash, status: "DONE" }, orderBy: { createdAt: "desc" } });
-  if (previous) return "Nothing changed since the last suggestions, so they were kept.";
+  // The owner's own click always asks the AI again; other runs reuse an unchanged answer.
+  if (previous && !opts.force) return "Nothing changed since the last suggestions, so they were kept.";
 
   const run = await db.analysisRun.create({ data: { restaurantId, purpose: "leads", provider: analyst.provider, model: analyst.model, dataHash } });
   const started = Date.now();

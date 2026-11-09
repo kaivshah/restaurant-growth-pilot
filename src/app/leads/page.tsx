@@ -221,6 +221,12 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           </>
         );
       })()}
+      {suggestJob?.status === "DONE" && suggestJob.message && suggestJob.finishedAt && now.getTime() - suggestJob.finishedAt.getTime() < 10 * 60_000 && (
+        <Notice tone={/^AI picked 0 /.test(suggestJob.message) ? "danger" : "green"} title="Picks finished.">
+          {suggestJob.message}
+          {/^AI picked 0 /.test(suggestJob.message) ? " Open the list of left-out picks below to see why." : ""}
+        </Notice>
+      )}
       {suggestJob?.status === "FAILED" && !suggesting && (
         <Notice tone="danger" title="Today's picks didn't finish.">
           {suggestJob.message}

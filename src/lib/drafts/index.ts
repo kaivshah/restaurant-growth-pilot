@@ -410,7 +410,7 @@ async function drain(lane: JobKind[], maxJobs: number) {
           next.kind === "LEADS"
             ? await leads!.scanArea(next.restaurantId, { force: next.force, web: (next.payload as { web?: boolean } | null)?.web })
             : next.kind === "SUGGEST"
-              ? await leads!.suggestLeads(next.restaurantId)
+              ? await leads!.suggestLeads(next.restaurantId, new Date(), { force: next.force })
               : next.kind === "DAILY"
                 ? await (await import("@/lib/daily")).runDailyPlan(next.restaurantId)
               : next.kind === "PITCH"
