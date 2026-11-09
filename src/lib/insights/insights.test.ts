@@ -108,3 +108,31 @@ describe("averaging lists that change week to week", () => {
     expect(used).toEqual({ COOKIES: 110, CHIPS: 60, BROWNIE: 10 });
   });
 });
+
+describe("coverage of uploaded weeks", () => {
+  it("averages Day Part weeks that start on different weekdays, and reports what is covered", async () => {
+    const { averagedReport, coverage } = await import("./index");
+    const day = (await loadAll(SAMPLE, ["DayPartSalesAndUnitsReport20260304.csv"]))[0];
+    if (day.type !== "dayPart") throw new Error("not day part");
+    // The same week again, with its day columns rotated (a week starting a day later) and double sales.
+    const rot = <T,>(xs: T[]) => [...xs.slice(1), xs[0]];
+    const double = (c: { units: number; sales: number; customers: number; avgTicket: number }) => ({ ...c, sales: c.sales * 2 });
+    const other = {
+      ...day,
+      period: { start: "2026-03-12", end: "2026-03-18" },
+      days: rot(day.days),
+      dayTotals: rot(day.dayTotals).map(double),
+      hours: day.hours.map((h) => ({ ...h, byDay: rot(h.byDay).map(double), week: double(h.week) })),
+      weekTotal: double(day.weekTotal),
+    } as ParsedReport;
+    const avg = averagedReport([day, other], "dayPart");
+    if (!avg || avg.type !== "dayPart") throw new Error("no average");
+    expect((avg as { weeksAveraged?: number }).weeksAveraged).toBe(2);
+    expect(avg.days).toEqual(rot(day.days)); // the newest week's order
+    // Each day is matched by name: Wed is (Wed + 2 × Wed) / 2 whatever its column.
+    const wed = (r: { days: string[]; dayTotals: { sales: number }[] }) => r.dayTotals[r.days.indexOf("Wed")].sales;
+    expect(wed(avg)).toBeCloseTo(wed(day) * 1.5, 1);
+    const c = coverage([day, other]);
+    expect(c).toEqual([{ type: "dayPart", uploaded: 2, used: 2, start: "2026-03-04", end: "2026-03-18", newestOnly: false }]);
+  });
+});

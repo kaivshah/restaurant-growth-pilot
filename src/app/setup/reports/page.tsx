@@ -1,5 +1,6 @@
 import { Card, CheckIcon, Notice, Pill } from "@/components/ui";
 import { db } from "@/lib/db";
+import { coverage } from "@/lib/insights";
 import { GROUP_TYPES, MAX_EXTRA_FILES, MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, type WeekRow, completeWeeks, summarise, weeksOf } from "@/lib/reports";
 import type { ParsedReport } from "@/lib/reports";
 import { requireRestaurant } from "@/lib/restaurant";
@@ -38,6 +39,9 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
     ? uploads.filter((u) => u.periodEnd?.getTime() === wisrWeek.getTime()).map((u) => u.data as unknown as ParsedReport)
     : [];
   const summary = summarise(weekReports);
+  // What the AI's numbers actually cover, report by report.
+  const covered = coverage(uploads.filter((u) => u.status !== "FLAGGED").map((u) => u.data as unknown as ParsedReport));
+  const rangeOf = (start: string | null, end: string | null) => (start && end ? weekLabel(new Date(start), new Date(end)) : "");
   const weekUploads = wisrWeek ? uploads.filter((u) => u.periodEnd?.getTime() === wisrWeek.getTime()) : [];
   const weekConfirmed = weekUploads.length > 0 && weekUploads.every((u) => u.status === "CONFIRMED");
 
@@ -175,7 +179,10 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
               <form action={confirmNumbers} className="flex flex-col gap-4">
                 <div>
                   <h2 className="text-lg font-bold">Do these numbers look right?</h2>
-                  <p className="text-sm text-muted">{summary.period ? weekLabel(new Date(summary.period.start), new Date(summary.period.end)) : ""} · read from your WISR files</p>
+                  <p className="text-sm text-muted">
+                    Your newest WISR week ({summary.period ? weekLabel(new Date(summary.period.start), new Date(summary.period.end)) : ""}), to check the files were read right. The AI uses all
+                    your weeks, averaged: see &ldquo;What the AI reads&rdquo; below.
+                  </p>
                 </div>
                 <input type="hidden" name="periodEnd" value={wisrWeek?.toISOString().slice(0, 10) ?? ""} />
                 <ConfirmList numbers={summary.numbers.map(({ key, label, display }) => ({ key, label, display }))} />
@@ -200,6 +207,28 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
               </form>
             )}
           </Card>
+          {covered.length > 0 && (
+            <Card className="flex flex-col gap-3 p-6">
+              <div>
+                <h2 className="text-lg font-bold">What the AI reads</h2>
+                <p className="text-sm text-muted">For each report: the weeks uploaded, and the weeks its numbers are averaged over (the latest {MAX_WEEKS} at most).</p>
+              </div>
+              <ul className="flex flex-col text-sm">
+                {covered.map((c) => (
+                  <li key={c.type} className="flex flex-col border-t border-sand py-2 first:border-0">
+                    <span className="flex justify-between gap-3">
+                      <span className="font-semibold">{REPORT_LABELS[c.type as keyof typeof REPORT_LABELS] ?? c.type}</span>
+                      <span className={`shrink-0 tabular-nums ${c.newestOnly ? "font-bold text-danger" : "text-ink-2"}`}>
+                        {c.type === "extraTable" ? `${c.used} ${c.used === 1 ? "file" : "files"}` : c.type === "cashInWeek" ? `${c.used} ${c.used === 1 ? "file" : "files"}, every date` : `${c.used} of ${c.uploaded} weeks`}
+                      </span>
+                    </span>
+                    {rangeOf(c.start, c.end) && <span className="text-[13px] text-muted">{rangeOf(c.start, c.end)}</span>}
+                    {c.newestOnly && <span className="text-[13px] text-danger">Its weeks don&apos;t line up (different layout), so only the newest is used. Re-export them from the same report screen.</span>}
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
           <div className="rounded-card bg-sand px-6 py-5 text-[15px] text-ink-2">
             <p className="mb-1 font-bold text-ink">Please don&apos;t upload</p>
             Bank statements, or labor files with employee names. We never need them, and they hold private details.

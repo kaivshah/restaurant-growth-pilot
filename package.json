@@ -13,6 +13,7 @@
     "fixtures": "tsx scripts/make-sample-fixtures.ts",
     "postinstall": "prisma generate",
     "ai:check": "tsx scripts/check-ai.ts",
+    "reports:check": "tsx scripts/check-reports.ts",
     "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {

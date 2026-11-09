@@ -136,11 +136,38 @@ function averageOf(xs: unknown[]): unknown {
  * period covering them all. Falls back to the newest week when the weeks
  * can't be lined up (for example a different list of inventory items).
  */
+const EMPTY_CELL = { units: 0, sales: 0, customers: 0, avgTicket: 0 };
+
+/**
+ * Day Part weeks put the same days and hours in the same order, so they can
+ * be averaged: days follow the first week's order (a week starting on another
+ * weekday is reordered), and an hour missing from a week counts as no sales.
+ */
+function alignDayParts(weeks: DayPartReport[]): DayPartReport[] {
+  const order = weeks[0].days;
+  const hours = [...new Set(weeks.flatMap((w) => w.hours.map((h) => h.hour24)))].sort((a, b) => a - b);
+  return weeks.map((w) => {
+    if (w.days.length !== order.length || order.some((d) => !w.days.includes(d))) return w; // different days: can't line up
+    const idx = order.map((d) => w.days.indexOf(d));
+    return {
+      ...w,
+      days: order,
+      dayTotals: idx.map((i) => w.dayTotals[i]),
+      hours: hours.map((h24) => {
+        const h = w.hours.find((x) => x.hour24 === h24);
+        const label = h?.label ?? weeks.flatMap((x) => x.hours).find((x) => x.hour24 === h24)!.label;
+        return h ? { ...h, byDay: idx.map((i) => h.byDay[i]) } : { label, hour24: h24, byDay: order.map(() => EMPTY_CELL), week: EMPTY_CELL };
+      }),
+    };
+  });
+}
+
 export function averagedReport<T extends ParsedReport["type"]>(
   reports: ParsedReport[],
   type: T,
 ): Extract<ParsedReport, { type: T }> | undefined {
-  const weeks = recentWeeks(reports, type);
+  const found = recentWeeks(reports, type);
+  const weeks = (type === "dayPart" && found.length > 1 ? alignDayParts(found as DayPartReport[]) : found) as typeof found;
   if (weeks.length <= 1) return weeks[0];
   try {
     // Dates differ week to week by definition; average everything else.
@@ -251,4 +278,40 @@ export function computeInsights(reports: ParsedReport[]): Insights {
     overuse: cats ? overuse(cats) : [],
     unitCosts: items ? unitCosts(items) : {},
   };
+}
+
+/** Report types read week by week (Cash In Week is read date by date, other files as tables). */
+const WEEKLY_TYPES = ["dayPart", "wisrSales", "wisrUnits", "wisrAdjCogs", "wisrInventoryItems", "wisrInventoryCategories", "wisrBreadOverShort"] as const;
+
+export interface Coverage {
+  type: string;
+  /** Weeks of this report uploaded */
+  uploaded: number;
+  /** Weeks the AI's numbers are averaged over (the latest, up to WEEKS_USED) */
+  used: number;
+  start: string | null;
+  end: string | null;
+  /** True when the weeks couldn't be lined up, so only the newest is used */
+  newestOnly: boolean;
+}
+
+/** For each report, how many weeks were uploaded and how many the AI's numbers actually cover. */
+export function coverage(reports: ParsedReport[]): Coverage[] {
+  const out: Coverage[] = [];
+  for (const type of WEEKLY_TYPES) {
+    const all = recentWeeks(reports, type, Infinity);
+    if (!all.length) continue;
+    const latest = recentWeeks(reports, type);
+    const avg = averagedReport(reports, type) as { weeksAveraged?: number; period: { start: string; end: string } | null } | undefined;
+    const used = avg?.weeksAveraged ?? 1;
+    out.push({ type, uploaded: all.length, used, start: avg?.period?.start ?? null, end: avg?.period?.end ?? null, newestOnly: latest.length > 1 && used === 1 });
+  }
+  const cash = reports.filter((r) => r.type === "cashInWeek");
+  if (cash.length) {
+    const dates = cash.flatMap((r) => (r.type === "cashInWeek" ? r.days.map((d) => d.date) : [])).sort();
+    out.push({ type: "cashInWeek", uploaded: cash.length, used: cash.length, start: dates[0] ?? null, end: dates.at(-1) ?? null, newestOnly: false });
+  }
+  const extras = reports.filter((r) => r.type === "extraTable").length;
+  if (extras) out.push({ type: "extraTable", uploaded: extras, used: extras, start: null, end: null, newestOnly: false });
+  return out;
 }
