@@ -121,6 +121,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
 
   const scanning = jobState(scanJob) === "working";
   const suggesting = jobState(suggestJob) === "working";
+  // Picks made before the latest scan don't cover what it found: say so, and offer to pick again.
+  const stalePicks = Boolean(suggestions.at && scan?.status === "DONE" && scan.createdAt > suggestions.at);
   const pitching = jobState(pitchJob) === "working";
   const recentPitchJobs = await db.draftJob.findMany({
     where: { restaurantId: restaurant.id, kind: "PITCH", status: { in: ["DONE", "FAILED"] }, finishedAt: { gte: new Date(now.getTime() - 10 * 60_000) } },
@@ -250,7 +252,14 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
                   : "Turn on an AI provider to get picks."}
           </p>
         </div>
-        {suggestions.blocked.length > 0 && (
+        {stalePicks && !suggesting && (
+          <Notice title="These picks are older than your latest scan.">
+            They were made on {suggestions.at!.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" })}, before the scan of{" "}
+            {scan!.createdAt.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles" })}. Click <strong>Suggest again</strong> for picks from
+            everything the new scan found.
+          </Notice>
+        )}
+        {suggestions.blocked.length > 0 && !stalePicks && (
           <details className="rounded-field border border-line bg-surface px-4 py-2.5 text-sm">
             <summary className="cursor-pointer font-semibold text-ink-2">
               {suggestions.blocked.length === 1 ? "1 AI pick was left out because it failed our checks" : `${suggestions.blocked.length} AI picks were left out because they failed our checks`}
