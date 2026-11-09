@@ -224,43 +224,33 @@ export async function removeReport(formData: FormData) {
   revalidatePath("/setup/reports");
 }
 
-/** Which report each confirm-screen number comes from. */
-const NUMBER_SOURCES: Record<string, ReportType> = {
-  netSales: "wisrSales",
-  cateringSales: "wisrSales",
-  customers: "wisrUnits",
-  averageTicket: "wisrUnits",
-  drinkPct: "wisrUnits",
-  discounts: "wisrAdjCogs",
-};
+/** The reports whose numbers the confirm table shows for each week. */
+const CONFIRM_TYPES: ReportType[] = ["wisrSales", "wisrUnits", "wisrAdjCogs", "dayPart"];
 
 export async function confirmNumbers(formData: FormData) {
   const restaurant = await requireRestaurant();
-  const periodEnd = String(formData.get("periodEnd") ?? "");
-  const shown = formData.getAll("shown").map(String);
-  const ticked = new Set(formData.getAll("ok").map(String));
-  const flaggedTypes = new Set(shown.filter((k) => !ticked.has(k)).map((k) => NUMBER_SOURCES[k]).filter(Boolean));
-  const weekTypes = new Set(shown.map((k) => NUMBER_SOURCES[k]).filter(Boolean));
-
-  const date = new Date(periodEnd);
-  if (Number.isNaN(date.getTime())) redirect("/setup/reports");
+  const shown = formData.getAll("shownWeek").map(String).filter((w) => /^\d{4}-\d{2}-\d{2}$/.test(w));
+  const ok = new Set(formData.getAll("okWeek").map(String));
+  if (!shown.length) redirect("/setup/reports");
   // Four weeks of each export are needed before the numbers are used.
   const uploads = await db.reportUpload.findMany({ where: { restaurantId: restaurant.id }, select: { reportType: true, periodStart: true, periodEnd: true, fileName: true, status: true } });
   if (completeWeeks(weeksOf("dayPart", uploads)).length < MIN_WEEKS || completeWeeks(weeksOf("wisr", uploads)).length < MIN_WEEKS) redirect("/setup/reports?need=1");
 
-  for (const type of weekTypes) {
+  // Each week shown: its summary reports are confirmed, or marked wrong (left out until uploaded again).
+  const flagged = shown.filter((w) => !ok.has(w));
+  for (const week of shown) {
     await db.reportUpload.updateMany({
-      where: { restaurantId: restaurant.id, reportType: type, periodEnd: date },
-      data: { status: flaggedTypes.has(type) ? "FLAGGED" : "CONFIRMED" },
+      where: { restaurantId: restaurant.id, reportType: { in: CONFIRM_TYPES }, periodEnd: new Date(week) },
+      data: { status: flagged.includes(week) ? "FLAGGED" : "CONFIRMED" },
     });
   }
   revalidatePath("/setup/reports");
-  if (flaggedTypes.size === 0 && restaurant.setupCompletedAt) {
-    // Setup is already done, so new numbers mean a fresh plan (deals and catering picks).
+  if (flagged.length === 0 && restaurant.setupCompletedAt) {
+    // Setup is already done, so new numbers mean a fresh plan.
     await enqueueDraftJob(restaurant.id, "DAILY");
     after(() => kickJobs());
   }
-  redirect(flaggedTypes.size > 0 ? "/setup/reports?flagged=1" : restaurant.setupCompletedAt ? "/setup/reports?saved=1" : "/setup/menu");
+  redirect(flagged.length > 0 ? "/setup/reports?flagged=1" : restaurant.setupCompletedAt ? "/setup/reports?saved=1" : "/setup/menu");
 }
 
 const rulesSchema = z.object({

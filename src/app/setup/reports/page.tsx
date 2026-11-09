@@ -1,11 +1,11 @@
 import { Card, CheckIcon, Notice, Pill } from "@/components/ui";
 import { db } from "@/lib/db";
-import { coverage } from "@/lib/insights";
+import { averagedReport, coverage } from "@/lib/insights";
 import { GROUP_TYPES, MAX_EXTRA_FILES, MAX_WEEKS, MIN_WEEKS, REPORT_LABELS, type UploadGroup, type WeekRow, completeWeeks, summarise, weeksOf } from "@/lib/reports";
 import type { ParsedReport } from "@/lib/reports";
 import { requireRestaurant } from "@/lib/restaurant";
 import { confirmNumbers, removeReport, removeWeek } from "../actions";
-import { ConfirmList } from "./confirm-list";
+import { type ConfirmRow, ConfirmWeeks } from "./confirm-weeks";
 import { MoreWeeks, WeekUpload } from "./week-upload";
 
 function fmtDate(d: Date | null) {
@@ -33,17 +33,42 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
   const wisrDone = completeWeeks(wisrWeeks).length;
   const ready = dayDone >= MIN_WEEKS && wisrDone >= MIN_WEEKS;
 
-  // Numbers to confirm: the most recent week that has a WISR sales, units or discount report.
-  const wisrWeek = uploads.find((u) => ["wisrSales", "wisrUnits", "wisrAdjCogs"].includes(u.reportType))?.periodEnd ?? null;
-  const weekReports = wisrWeek
-    ? uploads.filter((u) => u.periodEnd?.getTime() === wisrWeek.getTime()).map((u) => u.data as unknown as ParsedReport)
-    : [];
-  const summary = summarise(weekReports);
+  // Numbers to confirm: every week with a WISR sales, units or discount report, side by side, and their average.
+  const SUMMARY_TYPES = ["wisrSales", "wisrUnits", "wisrAdjCogs", "dayPart"];
+  const COLUMNS = ["Net sales", "Customers", "Avg ticket", "Drinks", "Discounts", "Catering", "Day Part sales"];
+  const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+  const cellsOf = (reports: ParsedReport[]) => {
+    const n = Object.fromEntries(summarise(reports).numbers.map((x) => [x.key, x.value]));
+    const cogs = reports.find((r) => r.type === "wisrAdjCogs");
+    const day = reports.find((r) => r.type === "dayPart");
+    const f = (v: number | undefined, fmt: (v: number) => string) => (typeof v === "number" ? fmt(v) : "–");
+    return [
+      f(n.netSales, money0),
+      f(n.customers, (v) => Math.round(v).toLocaleString("en-US")),
+      f(n.averageTicket, (v) => `$${v.toFixed(2)}`),
+      f(n.drinkPct, (v) => `${Math.round(v)}%`),
+      cogs && cogs.type === "wisrAdjCogs" ? `${money0(cogs.totalDiscounts.dollars)} · ${cogs.discountPctOfSales.toFixed(1)}%` : "–",
+      f(n.cateringSales, money0),
+      day && day.type === "dayPart" ? money0(day.weekTotal.sales) : "–",
+    ];
+  };
+  const checkWeeks = [...new Set(uploads.filter((u) => ["wisrSales", "wisrUnits", "wisrAdjCogs"].includes(u.reportType) && u.periodEnd).map((u) => u.periodEnd!.toISOString().slice(0, 10)))].sort();
+  const confirmRows: ConfirmRow[] = checkWeeks.map((end, i) => {
+    const of = uploads.filter((u) => u.periodEnd?.toISOString().slice(0, 10) === end && SUMMARY_TYPES.includes(u.reportType));
+    const start = of.find((u) => u.periodStart)?.periodStart ?? null;
+    return { end, label: `Week ${i + 1} · ${weekLabel(start, new Date(end))}`, cells: cellsOf(of.map((u) => u.data as unknown as ParsedReport)) };
+  });
+  const usable = uploads.filter((u) => u.status !== "FLAGGED").map((u) => u.data as unknown as ParsedReport);
+  const averaged = (["wisrSales", "wisrUnits", "wisrAdjCogs", "dayPart"] as const).flatMap((t) => {
+    const r = averagedReport(usable, t);
+    return r ? [r] : [];
+  });
+  const avgWeeks = Math.max(0, ...averaged.map((r) => (r as { weeksAveraged?: number }).weeksAveraged ?? 1));
+  const averageRow: ConfirmRow | null = confirmRows.length > 1 ? { end: "average", label: `${avgWeeks}-week average (what the AI uses)`, cells: cellsOf(averaged) } : null;
+  const confirmedAll = uploads.filter((u) => SUMMARY_TYPES.slice(0, 3).includes(u.reportType)).every((u) => u.status === "CONFIRMED");
   // What the AI's numbers actually cover, report by report.
   const covered = coverage(uploads.filter((u) => u.status !== "FLAGGED").map((u) => u.data as unknown as ParsedReport));
   const rangeOf = (start: string | null, end: string | null) => (start && end ? weekLabel(new Date(start), new Date(end)) : "");
-  const weekUploads = wisrWeek ? uploads.filter((u) => u.periodEnd?.getTime() === wisrWeek.getTime()) : [];
-  const weekConfirmed = weekUploads.length > 0 && weekUploads.every((u) => u.status === "CONFIRMED");
 
   /** One section: its uploaded weeks, empty slots up to four, then "add another week" up to eight. */
   const section = (group: UploadGroup, title: string, note: string, rows: WeekRow[], required: boolean) => {
@@ -169,44 +194,6 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
         </div>
 
         <aside className="flex flex-col gap-4">
-          <Card className="flex flex-col gap-4 p-6">
-            {summary.numbers.length === 0 ? (
-              <>
-                <h2 className="text-lg font-bold">Do these numbers look right?</h2>
-                <p className="text-muted">Add your WISR sales, units and discount reports, and we&apos;ll show what we read here for you to check.</p>
-              </>
-            ) : (
-              <form action={confirmNumbers} className="flex flex-col gap-4">
-                <div>
-                  <h2 className="text-lg font-bold">Do these numbers look right?</h2>
-                  <p className="text-sm text-muted">
-                    Your newest WISR week ({summary.period ? weekLabel(new Date(summary.period.start), new Date(summary.period.end)) : ""}), to check the files were read right. The AI uses all
-                    your weeks, averaged: see &ldquo;What the AI reads&rdquo; below.
-                  </p>
-                </div>
-                <input type="hidden" name="periodEnd" value={wisrWeek?.toISOString().slice(0, 10) ?? ""} />
-                <ConfirmList numbers={summary.numbers.map(({ key, label, display }) => ({ key, label, display }))} />
-                {flagged && (
-                  <Notice tone="danger" title="Thanks for checking.">
-                    Please export the reports marked &ldquo;Check again&rdquo; once more and upload them. The new copy replaces the old one.
-                  </Notice>
-                )}
-                {weekConfirmed && !flagged && <Notice tone="green">You confirmed these numbers.</Notice>}
-                {!ready && (
-                  <p className="text-sm font-semibold text-ink-2">
-                    Add {MIN_WEEKS} weeks of each to continue: Day Part Sales {Math.min(dayDone, MIN_WEEKS)} of {MIN_WEEKS}, WISR {Math.min(wisrDone, MIN_WEEKS)} of {MIN_WEEKS}.
-                  </p>
-                )}
-                <button
-                  type="submit"
-                  disabled={!ready}
-                  className="inline-flex min-h-[52px] items-center justify-center rounded-field bg-primary px-6 font-bold text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {restaurant.setupCompletedAt ? "Confirm these numbers" : "Save and continue"}
-                </button>
-              </form>
-            )}
-          </Card>
           {covered.length > 0 && (
             <Card className="flex flex-col gap-3 p-6">
               <div>
@@ -235,6 +222,41 @@ export default async function ReportsStep({ searchParams }: { searchParams: Prom
           </div>
         </aside>
       </div>
+      <Card className="flex flex-col gap-4 p-6">
+        {confirmRows.length === 0 ? (
+          <>
+            <h2 className="text-lg font-bold">Do these numbers look right?</h2>
+            <p className="text-muted">Add your WISR sales, units and discount reports, and we&apos;ll show what we read here for you to check.</p>
+          </>
+        ) : (
+          <form action={confirmNumbers} className="flex flex-col gap-4">
+            <div>
+              <h2 className="text-lg font-bold">Do these numbers look right?</h2>
+              <p className="text-sm text-muted">What we read from each week&apos;s files, and the weekly average the AI works from.</p>
+            </div>
+            <ConfirmWeeks columns={COLUMNS} weeks={confirmRows} average={averageRow} />
+            {flagged && (
+              <Notice tone="danger" title="Thanks for checking.">
+                Please export the weeks you marked once more and upload them. The new copy replaces the old one.
+              </Notice>
+            )}
+            {confirmedAll && !flagged && <Notice tone="green">You confirmed these numbers.</Notice>}
+            {!ready && (
+              <p className="text-sm font-semibold text-ink-2">
+                Add {MIN_WEEKS} weeks of each to continue: Day Part Sales {Math.min(dayDone, MIN_WEEKS)} of {MIN_WEEKS}, WISR {Math.min(wisrDone, MIN_WEEKS)} of {MIN_WEEKS}.
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={!ready}
+              className="inline-flex min-h-[52px] items-center justify-center self-start rounded-field bg-primary px-6 font-bold text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {restaurant.setupCompletedAt ? "Confirm these numbers" : "Save and continue"}
+            </button>
+          </form>
+        )}
+      </Card>
+
     </>
   );
 }
