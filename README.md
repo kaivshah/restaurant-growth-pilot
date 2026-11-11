@@ -228,14 +228,38 @@ External lookups (Google, Hunter, web search, event APIs) go through a shared tw
 
 ## Run it locally
 
-Requires Node 20+ and Postgres 14+.
+What you need is listed in [`requirements.txt`](requirements.txt): Node 20.9+ (22 recommended, see `.nvmrc`), PostgreSQL 14+, and a Claude API key. npm installs the packages from `package.json`.
 
-```bash
-npm install
-cp .env.example .env          # then set DATABASE_URL and AUTH_SECRET (npx auth secret)
-npx prisma migrate dev        # creates the tables
-npm run dev                   # http://localhost:3000
-```
+1. **Get the code and the packages**
+   ```bash
+   git clone https://github.com/kaivshah/restaurant-growth-pilot.git
+   cd restaurant-growth-pilot
+   npm ci                         # exact versions from package-lock.json; also generates the Prisma client
+   ```
+2. **Start Postgres and make a database** (any local or hosted Postgres works)
+   ```bash
+   # macOS with Homebrew: brew install postgresql@16 && brew services start postgresql@16
+   psql postgres -c "CREATE USER app WITH PASSWORD 'app' CREATEDB;"
+   createdb -U app restaurant_growth
+   ```
+3. **Settings**
+   ```bash
+   cp .env.example .env
+   npx auth secret                # writes AUTH_SECRET into .env.local
+   ```
+   In `.env`, set at least `DATABASE_URL` (e.g. `postgresql://app:app@localhost:5432/restaurant_growth`) and `ANTHROPIC_API_KEY`. For real nearby businesses and events, also `PLACES_PROVIDER="google"` with `GOOGLE_MAPS_API_KEY`, and `TICKETMASTER_API_KEY`. To try it without keys, use `PLACES_PROVIDER="fake"`, `EVENTS_PROVIDER="fake"` and `ANALYST_PROVIDER="fake"`.
+4. **Create the tables**
+   ```bash
+   npx prisma migrate deploy
+   ```
+5. **Run it: two terminals**
+   ```bash
+   npm run dev                    # the app: http://localhost:3000
+   npm run worker                 # background jobs: scans, analysis, picks, pitches
+   ```
+6. **Sign in** with **Continue as demo owner** (shown when `DEV_LOGIN=true`, never in production), then follow setup: your store, 4 weeks of Day Part Sales and WISR reports, your offer rules.
+
+Useful checks: `npm run ai:check` (one test request to the AI), `npm run reports:check` (what the AI reads from your uploads), `npm test`, `npm run typecheck`, `npm run lint`.
 
 ### Starting over
 

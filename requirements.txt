@@ -1,0 +1,70 @@
+# Restaurant Growth Pilot: what you need to run it locally
+#
+# This is a Node.js (Next.js) app, not a Python one: `pip install -r` does not
+# apply. The packages below are installed by npm from package.json, at the
+# exact versions in package-lock.json:
+#
+#     npm ci
+#
+# This file lists everything else you need, and the package versions for reference.
+# Step-by-step setup: README.md, "Run it locally".
+
+# ---------------------------------------------------------------------------
+# 1. Tools to install on your computer
+# ---------------------------------------------------------------------------
+node >= 20.9          # tested with Node 22 (see .nvmrc); includes npm >= 10
+postgresql >= 14      # tested with 16; any local or hosted Postgres works
+git
+
+# ---------------------------------------------------------------------------
+# 2. Accounts and keys (put them in .env; copy .env.example first)
+# ---------------------------------------------------------------------------
+# Required
+DATABASE_URL          # e.g. postgresql://app:app@localhost:5432/restaurant_growth
+AUTH_SECRET           # any long random string: `npx auth secret`
+ANTHROPIC_API_KEY     # Claude, from platform.claude.com: writes every offer, pick and pitch
+
+# Strongly recommended
+GOOGLE_MAPS_API_KEY   # Places API (New) + Geocoding API: finds nearby businesses. Set PLACES_PROVIDER=google
+TICKETMASTER_API_KEY  # free key from developer.ticketmaster.com: local events
+
+# Optional
+AUTH_GOOGLE_ID        # "Sign in with Google" (otherwise use DEV_LOGIN=true locally)
+AUTH_GOOGLE_SECRET
+PREDICTHQ_API_KEY     # more events (paid)
+GEMINI_API_KEY        # only if you choose Gemini instead of Claude
+# Trying it without any keys: PLACES_PROVIDER=fake, EVENTS_PROVIDER=fake and
+# ANALYST_PROVIDER=fake use made-up sample data (see .env.example).
+
+# ---------------------------------------------------------------------------
+# 3. npm packages (installed by `npm ci`; listed here for reference)
+# ---------------------------------------------------------------------------
+# Runtime
+@anthropic-ai/sdk==1.2.0
+@auth/prisma-adapter==2.11.3
+@prisma/client==6.19.3
+exceljs==4.4.0
+fflate==0.8.2
+next==15.5.28
+next-auth==5.0.0-beta.29
+papaparse==5.7.0
+qrcode==1.5.4
+react==19.1.0
+react-dom==19.1.0
+zod==3.25.76
+
+# Development and build
+@eslint/eslintrc==3.3.7
+@tailwindcss/postcss==4.3.3
+@types/node==20.19.43
+@types/papaparse==5.5.2
+@types/qrcode==1.5.5
+@types/react==19.3.0
+@types/react-dom==19.3.0
+eslint==9.39.5
+eslint-config-next==15.5.28
+prisma==6.19.3
+tailwindcss==4.3.3
+tsx==4.23.15
+typescript==5.9.3
+vitest==3.2.7
