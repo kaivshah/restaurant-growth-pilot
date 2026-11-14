@@ -111,8 +111,51 @@ model Restaurant {
   gmail                GmailAccount?
   emails               OutboundEmail[]
   suppressions         Suppression[]
+  menuItems            MenuItem[]
+  /// When the owner last confirmed the menu and its prices
+  menuConfirmedAt      DateTime?
 
   @@index([ownerId])
+}
+
+// ---------- Menu (phase 1) ----------
+
+/// Where a menu line came from: the seeded brand catalogue, a photo/PDF/CSV the AI read, or typed by the owner.
+enum MenuSource {
+  SEED
+  READ
+  OWNER
+}
+
+/// One sellable thing with its local price: a sub in one size, a side, a drink, a catering platter.
+model MenuItem {
+  id             String     @id @default(cuid())
+  restaurantId   String
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// e.g. "Subs", "Wraps", "Salads", "Sides", "Drinks", "Breakfast", "Kids", "Extras", "Catering"
+  category       String
+  name           String
+  /// e.g. "6-inch", "Footlong", "21 oz", "3 ft"; empty when the item has one size
+  size           String     @default("")
+  /// Local menu price in USD; null until the owner or a menu read fills it in
+  price          Float?
+  /// What the store pays, when known (from the inventory report's unit cost, or typed)
+  cost           Float?
+  isCatering     Boolean    @default(false)
+  /// For catering: how many people one unit serves
+  servesMin      Int?
+  servesMax      Int?
+  /// Sold here (an owner can turn off items their store doesn't carry)
+  active         Boolean    @default(true)
+  source         MenuSource @default(SEED)
+  sortOrder      Int        @default(0)
+  /// Inventory report item names that count as this menu item (filled by the mapping step)
+  inventoryNames String[]   @default([])
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([restaurantId, category, name, size])
+  @@index([restaurantId, isCatering, active])
 }
 
 model Outlet {

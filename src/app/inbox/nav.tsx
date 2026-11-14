@@ -32,6 +32,7 @@ const GROUPS: { title?: string; items: { href: string; label: string; match: str
 export const SETTINGS_TABS = [
   { href: "/setup/restaurant", label: "Store & area" },
   { href: "/setup/reports", label: "Sales reports" },
+  { href: "/setup/menu", label: "Menu & prices" },
   { href: "/setup/rules", label: "Offer rules" },
   { href: "/settings/email", label: "Email sending" },
 ];
