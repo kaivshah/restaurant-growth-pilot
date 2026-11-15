@@ -76,7 +76,9 @@ export default async function StoreReportPage() {
   const days = (r.days?.days ?? []) as { day: string; sales: number; customers: number }[];
   const mix = (r.mix?.sandwich_mix ?? []) as { item: string; units: number; share_pct: number | null }[];
   const catering = ((r.mix?.catering_by_type ?? []) as { kind: string; quantity: number; dollars: number }[]).filter((c) => c.quantity > 0 || c.dollars > 0);
-  const addOns = (r.mix?.add_on_items ?? []) as { item: string; used_per_week: number; unit_cost: number | null }[];
+  const sellables = (r.items?.sellable_items ?? []) as { line: string; menu_item: string | null; units_per_week: number; unit_cost: number | null; menu_price: number | null; margin_per_unit: number | null; margin_per_week: number | null }[];
+  const proteins = (r.items?.proteins_by_usage ?? []) as { line: string; used_per_week: number; share_of_protein_cost_pct: number | null }[];
+  const menuPriced = typeof r.menu?.priced_items === "number" ? r.menu.priced_items : 0;
   const stock = ((r.stock?.categories ?? []) as { category: string; used_dollars: number; diff_dollars: number | null }[]).filter(
     (c) => c.diff_dollars != null && c.diff_dollars !== 0 && !/total|cost of goods/i.test(c.category),
   );
@@ -199,18 +201,39 @@ export default async function StoreReportPage() {
                 )}
               </Section>
             )}
-            {addOns.length > 0 && (
-              <Section title="Sides, cookies and drinks used" source="WISR inventory items, per typical week">
+            {sellables.length > 0 && (
+              <Section title="Sides, cookies and drinks: what they earn" source={`WISR inventory items, per typical week${menuPriced ? ", priced from your menu" : ". Add menu prices to see margins"}`}>
                 <ul className="flex flex-col text-sm">
-                  {addOns.slice(0, 8).map((a) => (
-                    <li key={a.item} className="flex justify-between gap-3 border-t border-sand py-1.5 first:border-0">
-                      <span className="break-words">{a.item}</span>
-                      <span className="shrink-0 tabular-nums text-ink-2">
-                        {count(a.used_per_week)} used{a.unit_cost != null ? ` · ${money(a.unit_cost, true)} each` : ""}
+                  {sellables.slice(0, 10).map((a) => (
+                    <li key={a.line} className="flex justify-between gap-3 border-t border-sand py-1.5 first:border-0">
+                      <span className="break-words">
+                        {a.menu_item ?? a.line}
+                        {a.menu_item && a.menu_item !== a.line && <span className="block text-[12px] text-muted">{a.line}</span>}
+                      </span>
+                      <span className="shrink-0 text-right tabular-nums text-ink-2">
+                        {count(a.units_per_week)} a week
+                        {a.unit_cost != null ? ` · cost ${money(a.unit_cost, true)}` : ""}
+                        {a.menu_price != null ? ` · sells ${money(a.menu_price, true)}` : ""}
+                        {a.margin_per_week != null && <span className="block text-[12px] font-bold text-primary-ink">{money(a.margin_per_week)} margin a week</span>}
                       </span>
                     </li>
                   ))}
                 </ul>
+              </Section>
+            )}
+            {proteins.length > 0 && (
+              <Section title="Which fillings sell" source="WISR inventory items: protein usage, per typical week">
+                <Bars rows={proteins.slice(0, 8).map((p) => ({ label: p.line.length > 10 ? `${p.line.slice(0, 9)}…` : p.line, value: p.used_per_week, text: p.share_of_protein_cost_pct != null ? `${pct(p.share_of_protein_cost_pct)} of filling cost` : count(p.used_per_week) }))} />
+              </Section>
+            )}
+            {menuPriced === 0 && (
+              <Section title="Menu prices" source="Settings → Menu & prices">
+                <p className="text-sm text-ink-2">
+                  No prices yet. Add your menu (a photo is enough) and the AI can name items in offers, value a free item correctly, and price catering platters.{" "}
+                  <Link href="/setup/menu" className="font-bold">
+                    Add the menu
+                  </Link>
+                </p>
               </Section>
             )}
             {r.discounts && (

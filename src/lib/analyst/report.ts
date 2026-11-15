@@ -25,7 +25,7 @@ const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const hourName = (h: number) => (h === 0 ? "12 am" : h < 12 ? `${h} am` : h === 12 ? "12 pm" : `${h - 12} pm`);
 
-type ReportData = Record<"reports" | "week" | "trend" | "hourly" | "days" | "mix" | "discounts" | "stock" | "bread" | "daily", Obj | null>;
+type ReportData = Record<"reports" | "week" | "trend" | "hourly" | "days" | "mix" | "items" | "menu" | "discounts" | "stock" | "bread" | "daily", Obj | null>;
 export type StoreReport = ReportData & { highlights: Highlight[] };
 
 export function buildStoreReport(ctx: AnalystContext): StoreReport {
@@ -36,6 +36,8 @@ export function buildStoreReport(ctx: AnalystContext): StoreReport {
     hourly: run(ctx, "get_hourly_sales"),
     days: run(ctx, "get_day_totals"),
     mix: run(ctx, "get_sales_mix"),
+    items: run(ctx, "get_item_sales"),
+    menu: run(ctx, "get_menu"),
     discounts: run(ctx, "get_discount_breakdown"),
     stock: run(ctx, "get_inventory_usage"),
     bread: run(ctx, "get_bread_over_short"),

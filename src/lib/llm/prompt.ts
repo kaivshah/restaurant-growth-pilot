@@ -50,7 +50,7 @@ export function pitchRules(packet: FactsPacket): string {
     "Write short catering pitch emails from a local restaurant owner to nearby businesses. For each, the email subject is \"headline\" and the email is \"body\".",
     `A body may be up to ${LIMITS.pitchBody} characters: a greeting, two or three short paragraphs, a clear ask to reply with a date and headcount, and a sign-off.`,
     `From: ${packet.restaurant.name}${packet.restaurant.brand ? ` (${packet.restaurant.brand})` : ""}`,
-    "Use only the facts given for each email, and state the offer exactly as given. Don't mention other prices, menu items or anything not listed. Sound like a neighbour, not an ad.",
+    "Use only the facts given for each email, and state the offer exactly as given. Menu items and prices may be named only when they appear in the facts; nothing else about the menu. Sound like a neighbour, not an ad.",
   ];
   if (packet.restaurant.kind === "FRANCHISE") lines.push(`End every body with a line saying ${packet.restaurant.name} is ${INDEPENDENT_LINE}.`);
   if (packet.rules.brandSafe) lines.push("Keep the tone modest: no superlatives and no comparisons with other restaurants.");

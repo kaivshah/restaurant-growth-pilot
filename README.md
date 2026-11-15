@@ -8,7 +8,7 @@ Name not decided yet, so the app calls itself **product**.
 
 ### How it works (redesign)
 
-1. **Setup:** the owner enters the store, uploads two exports, and sets their rules.
+1. **Setup:** the owner enters the store, uploads two exports, adds their menu and prices, and sets their rules.
    - **Day Part / Hourly Sales & Units** (CSV, one per week).
    - **The WISR zip as it downloads** (sales, units, discounts, inventory, bread over/short).
    - Each has its own section with one upload button per week: 4 weeks of each are needed, up to 8 can be added (more weeks is more for the AI to read). The AI uses weekly averages of all of them (inventory items are matched by name, so lists that change week to week still average). Each WISR zip is unpacked and all six reports are read.
@@ -17,6 +17,9 @@ Name not decided yet, so the app calls itself **product**.
    - **What the AI reads** (Sales reports page) lists each report with the weeks uploaded and the weeks its numbers are averaged over, and flags any report whose weeks don't line up. `npm run reports:check` prints the same from the terminal, with every uploaded file.
    - **Store report** (menu → Store report) shows what the reports say: what stands out, key numbers with the trend, sales by hour and day, the sales mix, giveaways, stock and waste, daily sales, other reports and the AI's findings. It's built from the same data tools the AI reads, with no AI call.
    - Labor hours, payroll and staff schedules are refused and not kept: they hold names and pay, and we don't need them.
+   - **Menu & prices** (setup step 3, Settings → Menu & prices): Subway's standard line-up is pre-filled with no prices. Upload a photo or PDF of the menu board (read by Claude with vision, one small request) or a CSV, then check the table: prices, your cost, sold-here, extra items. The AI can only name, give away or discount an item that has a price; catering platters with servings and prices make catering offers concrete.
+   - **Item sales and margins:** the WISR inventory lines are linked to the menu once (Claude Haiku, cached), so the AI sees what each side, cookie or drink costs and earns per week, which fillings sell most, and where stock is wasted (`get_item_sales`). The store report shows the same.
+   - One definition of day parts everywhere: lunch is 11 am–2 pm, afternoon 2–5 pm.
 2. **Area scan, no AI:**
    - Google Places finds offices, coworking spaces, schools, clinics, gyms and venues; results are cached 7 days.
    - Ticketmaster and PredictHQ find events in the **next 30 days**.
@@ -257,7 +260,7 @@ What you need is listed in [`requirements.txt`](requirements.txt): Node 20.9+ (2
    npm run dev                    # the app: http://localhost:3000
    npm run worker                 # background jobs: scans, analysis, picks, pitches
    ```
-6. **Sign in** with **Continue as demo owner** (shown when `DEV_LOGIN=true`, never in production), then follow setup: your store, 4 weeks of Day Part Sales and WISR reports, your offer rules.
+6. **Sign in** with **Continue as demo owner** (shown when `DEV_LOGIN=true`, never in production), then follow setup: your store, 4 weeks of Day Part Sales and WISR reports, your menu and prices (a photo of the board is enough), your offer rules.
 
 Useful checks: `npm run ai:check` (one test request to the AI), `npm run reports:check` (what the AI reads from your uploads), `npm test`, `npm run typecheck`, `npm run lint`.
 

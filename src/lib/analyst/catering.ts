@@ -42,7 +42,7 @@ export const CateringOffer = z.object({
   percent_off: z.number().min(0).max(100).optional(),
   min_people: z.number().int().min(1),
   occasion: z.string().max(120).describe("What the food is for at this business or event"),
-  selling_points: z.array(z.string().max(140)).max(3).describe("Up to 3 short facts the email may use, e.g. delivery distance or a quiet hour the kitchen can prepare in. No numbers that aren't in the data."),
+  selling_points: z.array(z.string().max(140)).max(4).describe("Up to 4 short facts the email may use: the menu items and prices in the offer, delivery distance, timing. No numbers that aren't in the data."),
   why: z.string().max(600).describe("The rationale the owner reads: which report or scan fact it comes from, and why this offer suits this business"),
   confidence: z.enum(["low", "medium", "high"]),
   evidence: z.array(Evidence).max(6).default([]),
@@ -124,7 +124,7 @@ const CATERING_TOOLS: ToolDef<unknown, CateringContext>[] = [
       figures: [...ctx.brief, ...ctx.findings.map((f) => f.detail)].flatMap((b) => [...b.matchAll(/\d[\d,]*(?:\.\d+)?/g)].map((m) => Number(m[0].replace(/,/g, "")))),
     }),
   },
-  ...(DATA_TOOLS.filter((t) => ["get_rules", "get_week_summary", "get_sales_mix", "get_hourly_sales", "estimate_offer_cost"].includes(t.name)) as ToolDef<unknown, CateringContext>[]),
+  ...(DATA_TOOLS.filter((t) => ["get_rules", "get_menu", "get_week_summary", "get_sales_mix", "get_hourly_sales", "estimate_offer_cost"].includes(t.name)) as ToolDef<unknown, CateringContext>[]),
 ];
 
 export const CATERING_SYSTEM = `You decide the catering offer a small restaurant makes to each business or event the owner chose to pitch. The goal is a first catering order, and repeat orders after it.
@@ -133,6 +133,7 @@ Use the store's analysis and the business together:
 - The store's side (get_store_analysis, get_week_summary, get_sales_mix, get_hourly_sales): how much catering it sells and of what type, its quiet hours (when the kitchen can prepare a large order), its average order, the discounts it already gives, and what the analysis found.
 - The business's side (list_pitch_targets): what kind of place it is, how far, how busy (reviews, event attendance), the occasion, and why it was picked.
 - Choose the offer type that fits both: % off or $ off a first order, a free item (a platter, a drinks tray), free delivery, or a bundle price. Different businesses can get different offers; an event with many people might suit a bundle, a small office a free item or delivery.
+- When get_menu is present, make the offer concrete with its catering items and prices ("Classic Combo Platter, serves 5–9, $54.99: 15% off your first order"; "a free Cookie Platter (36) with any order of 10 or more"), and put the item and its price in selling_points so the email can say it. Only items and prices from get_menu; never invent a platter or a price.
 
 Rules:
 - Respect get_rules: the largest discount (max_discount_pct) and the allowed offer types. If brand_safe_mode is true, no price cuts.
@@ -220,7 +221,7 @@ async function decideBatch(model: AnalystModel, ctx: CateringContext, limits: Ru
       ctx: sub,
       tools: [],
       prefetchTools: CATERING_TOOLS,
-      prefetch: [{ name: "get_rules" }, { name: "list_pitch_targets" }, { name: "get_store_analysis" }, { name: "get_week_summary" }, { name: "get_sales_mix" }, { name: "get_hourly_sales" }],
+      prefetch: [{ name: "get_rules" }, ...(ctx.menu.priced ? [{ name: "get_menu" }] : []), { name: "list_pitch_targets" }, { name: "get_store_analysis" }, { name: "get_week_summary" }, { name: "get_sales_mix" }, { name: "get_hourly_sales" }],
       oneShot: true,
       submit: { name: "submit_catering_offers", description: "Submit one catering offer per target.", jsonSchema: SUBMIT_JSON, schema: Submission },
       limits: { maxTurns: 2, ...limits },
