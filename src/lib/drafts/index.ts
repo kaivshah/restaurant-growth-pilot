@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DraftJob, JobKind, Prisma, Restaurant } from "@prisma/client";
-import { analystFromEnv, buildContext, estimateCostUsd, mergeIdeas, proposalToOffer, runAnalysis } from "@/lib/analyst";
+import { analystFromEnv, buildContext, estimateCostUsd, mergeIdeas, proposalToOffer, runPipeline } from "@/lib/analyst";
 import type { AnalysisOutcome, AnalystContext } from "@/lib/analyst";
 import { db } from "@/lib/db";
 import { AiBusyError, AiConfigError, type FactsPacket, type CallLog, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
@@ -47,14 +47,30 @@ export async function usableReports(restaurantId: string) {
 /** failed: no fresh analysis, so the ideas already in the inbox stay. */
 type IdeaResult = { offers: OfferCandidate[]; analysisRunId: string | null; note: string; failed?: boolean };
 
+/** Each pipeline stage's answer, kept for a week by the hash of its inputs, so a rerun redoes only what changed. */
+function stageCache(restaurantId: string) {
+  const key = (k: string) => `${k}:${restaurantId}`;
+  return {
+    async get(k: string) {
+      const hit = await db.cacheEntry.findUnique({ where: { key: key(k) } });
+      return hit && hit.expiresAt > new Date() ? hit.value : null;
+    },
+    async set(k: string, value: unknown) {
+      const v = JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+      const expiresAt = new Date(Date.now() + 7 * 86_400_000);
+      await db.cacheEntry.upsert({ where: { key: key(k) }, create: { key: key(k), value: v, expiresAt }, update: { value: v, expiresAt } });
+    },
+  };
+}
+
 /**
  * The AI analyst's offer ideas, each built from the uploaded reports.
  * A run is reused while the reports, rules and past decisions are unchanged,
  * so refreshing doesn't pay for the same analysis twice.
  */
-const ANALYST_VERSION = 4;
+const ANALYST_VERSION = 5;
 
-async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof usableReports>>["rows"]): Promise<IdeaResult> {
+async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof usableReports>>["rows"], opts: { steer?: string } = {}): Promise<IdeaResult> {
   // Every offer comes from the AI analyst's study of the reports: no fixed ideas.
   const baseline: OfferCandidate[] = [];
   const analyst = analystFromEnv();
@@ -103,9 +119,12 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
 
   const run = await db.analysisRun.create({ data: { restaurantId: restaurant.id, provider: analyst.provider, model: analyst.model, dataHash } });
   const started = Date.now();
-  // Ideas the owner already decided on shouldn't come back under a new name.
-  const outcome = await runAnalysis(analyst, ctx, baseline, decisions.map((d) => d.title), {
-    onTurn: (turn, lookups) => progress(restaurant.id, "OFFERS", `AI is studying your reports (step ${turn}, ${lookups} data lookups so far)…`),
+  // The pipeline: diagnose, strategise, critique, verify. Ideas the owner already decided on don't come back under a new name.
+  const outcome = await runPipeline(analyst, ctx, {
+    existingTitles: decisions.map((d) => d.title),
+    steer: opts.steer,
+    cache: stageCache(restaurant.id),
+    onStage: (stage, note) => progress(restaurant.id, "OFFERS", `AI ${stage === "diagnose" ? "diagnosis" : stage === "strategise" ? "ideas" : stage === "critique" ? "critique" : "checks"}: ${note}`),
   });
   if (outcome.fatal) {
     await db.analysisRun.update({ where: { id: run.id }, data: { status: "FAILED", error: outcome.error ?? null, model: analyst.model, finishedAt: new Date() } });
@@ -119,7 +138,12 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
     throw new AiBusyError(outcome.error ?? "The AI analyst is busy.", outcome.busy.retryAfterMs);
   }
   const aiOffers = outcome.proposals.map((p) => proposalToOffer(p, ctx, outcome.toolLog));
-  const findings = outcome.findings.map((f) => ({ title: f.title, detail: f.detail, citations: citationsFor(f.evidence, outcome) }));
+  const findings = outcome.findings.map((f) => ({
+    title: f.title,
+    detail: f.detail,
+    kind: f.kind,
+    citations: [...citationsFor(f.evidence, outcome), ...f.calculations.map((c) => ({ label: c.label, value: c.result, source: `Worked out: ${c.formula} from ${c.inputs.map((i) => i.value).join(", ")}` }))],
+  }));
   await db.analysisRun.update({
     where: { id: run.id },
     data: {
@@ -129,7 +153,8 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
       findings: json(findings),
       accepted: json({ offers: aiOffers, proposals: outcome.proposals }),
       rejected: json(outcome.rejected),
-      baselineDecisions: json(outcome.baselineDecisions),
+      baselineDecisions: json([]),
+      stages: json(outcome.stages ?? {}),
       toolLog: json(outcome.toolLog),
       toolCalls: outcome.toolCalls,
       inputTokens: outcome.inputTokens,
@@ -143,13 +168,13 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
     return { offers: [], analysisRunId: run.id, note: `analysis failed (${outcome.error}); the ideas already in the inbox stay`, failed: true };
   }
   return {
-    offers: mergeIdeas(baseline, aiOffers, outcome),
+    offers: mergeIdeas(baseline, aiOffers, { proposals: outcome.proposals, baselineDecisions: [] }),
     analysisRunId: run.id,
     note: `analysis found ${outcome.findings.length} insights, ${outcome.proposals.length} offers (${outcome.rejected.length} rejected by checks)`,
   };
 }
 
-function citationsFor(evidence: AnalysisOutcome["findings"][number]["evidence"], outcome: AnalysisOutcome) {
+function citationsFor(evidence: { tool_call_id: string; field: string; value: number; label: string }[], outcome: { toolLog: { id: string; output: unknown }[] }) {
   return evidence.map((e) => {
     const out = outcome.toolLog.find((c) => c.id === e.tool_call_id)?.output as { source?: string | string[] } | undefined;
     const source = Array.isArray(out?.source) ? out.source.join("; ") : (out?.source ?? "Your reports");

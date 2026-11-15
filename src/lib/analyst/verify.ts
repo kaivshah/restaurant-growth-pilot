@@ -64,8 +64,8 @@ export function checkTextNumbers(text: string, log: ToolLog, extra: number[] = [
  * Plain numbers with three or more digits (e.g. "1,200 attendees") must also
  * come from the data. Years like 2026 are allowed.
  */
-export function checkPlainNumbers(text: string, log: ToolLog): string[] {
-  const known = collectNumbers(log.map((c) => c.output));
+export function checkPlainNumbers(text: string, log: ToolLog, extra: number[] = []): string[] {
+  const known = [...collectNumbers(log.map((c) => c.output)), ...extra];
   const problems: string[] = [];
   for (const m of text.matchAll(/(?<![$\d.,])(\d{1,3}(?:,\d{3})+|\d{3,})(?![\d%])/g)) {
     const n = parseFloat(m[0].replace(/,/g, ""));
@@ -145,4 +145,87 @@ export function itemKey(item: string): string {
   const drink = /drink|soda|fountain|beverage/.test(item.toLowerCase());
   if (drink) return "drink";
   return last.replace(/s$/, "");
+}
+
+// ---------- Calculations the AI shows its working for ----------
+
+/**
+ * Evaluates a small arithmetic formula over named inputs: numbers, + - * /,
+ * parentheses and the input names. Anything else is refused, so the AI
+ * can't smuggle code in. Returns null when the formula is malformed.
+ */
+export function evalFormula(formula: string, inputs: Record<string, number>): number | null {
+  const tokens = formula.match(/\d+(?:\.\d+)?|[a-zA-Z_][a-zA-Z0-9_]*|[-+*/()]/g);
+  if (!tokens || tokens.join("") !== formula.replace(/\s+/g, "")) return null;
+  let i = 0;
+  const peek = () => tokens[i];
+  const next = () => tokens[i++];
+  const factor = (): number | null => {
+    const t = next();
+    if (t === undefined) return null;
+    if (t === "(") {
+      const v = expr();
+      return next() === ")" ? v : null;
+    }
+    if (t === "-") {
+      const v = factor();
+      return v === null ? null : -v;
+    }
+    if (/^\d/.test(t)) return Number(t);
+    return t in inputs ? inputs[t] : null;
+  };
+  const term = (): number | null => {
+    let v = factor();
+    while (v !== null && (peek() === "*" || peek() === "/")) {
+      const op = next();
+      const r = factor();
+      if (r === null) return null;
+      v = op === "*" ? v * r : r === 0 ? null : v / r;
+    }
+    return v;
+  };
+  const expr = (): number | null => {
+    let v = term();
+    while (v !== null && (peek() === "+" || peek() === "-")) {
+      const op = next();
+      const r = term();
+      if (r === null) return null;
+      v = op === "+" ? v + r : v - r;
+    }
+    return v;
+  };
+  const v = expr();
+  return i === tokens.length && v !== null && Number.isFinite(v) ? v : null;
+}
+
+export interface CalculationLike {
+  label: string;
+  inputs: { name: string; tool_call_id: string; field: string; value: number }[];
+  formula: string;
+  result: number;
+}
+
+/** Each input must be a real cited number, and the formula must give the stated result (within 1%). */
+export function checkCalculation(c: CalculationLike, log: ToolLog): string[] {
+  const problems = checkEvidence(
+    c.inputs.map((x) => ({ tool_call_id: x.tool_call_id, field: x.field, value: x.value, label: `${c.label} (${x.name})` })),
+    log,
+  );
+  if (problems.length) return problems;
+  const value = evalFormula(c.formula, Object.fromEntries(c.inputs.map((x) => [x.name, x.value])));
+  if (value === null) return [`"${c.label}": the formula "${c.formula}" couldn't be worked out.`];
+  if (Math.abs(value - c.result) > Math.max(0.06, Math.abs(value) * 0.01)) return [`"${c.label}": ${c.formula} gives ${Math.round(value * 100) / 100}, not ${c.result}.`];
+  return [];
+}
+
+/** The results of verified calculations, so the text may quote them. */
+export const calculationResults = (calcs: CalculationLike[]) => calcs.map((c) => c.result);
+
+/** A pipeline finding: cited numbers, calculations redone, and no other numbers in the text. */
+export function checkDiagnosisFinding(f: { title: string; detail: string; calculations: CalculationLike[]; evidence: Evidence[] }, log: ToolLog): string[] {
+  const problems = [...checkEvidence(f.evidence, log), ...f.calculations.flatMap((c) => checkCalculation(c, log))];
+  if (problems.length) return problems;
+  if (f.evidence.length === 0 && f.calculations.length === 0) return ["No numbers cited."];
+  const extra = [...calculationResults(f.calculations), ...f.calculations.flatMap((c) => c.inputs.map((x) => x.value))];
+  return [...checkTextNumbers(`${f.title} ${f.detail}`, log, extra), ...checkPlainNumbers(`${f.title} ${f.detail}`, log, extra)];
 }

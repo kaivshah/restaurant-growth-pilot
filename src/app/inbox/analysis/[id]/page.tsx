@@ -5,7 +5,14 @@ import { db } from "@/lib/db";
 import { requireRestaurant } from "@/lib/restaurant";
 import { AppShell } from "../../shell";
 
-type Finding = { title: string; detail: string; citations: { label: string; value: number; source: string }[] };
+type Finding = { title: string; detail: string; kind?: string; citations: { label: string; value: number; source: string }[] };
+type Stages = {
+  diagnosis: { findings: { title: string; kind: string; calculations: { label: string; formula: string; result: number; inputs: { name: string; value: number }[] }[] }[]; rejected: { title: string; reasons: string[] }[]; cached: boolean };
+  strategy: { candidates: { key: string; title: string; goal: string; target: string; item: string; answers_finding: number; idea_source?: string }[]; cached: boolean; retried: boolean };
+  critique: { scores: { key: string; expected_lift: number; cost_efficiency: number; fit: number; novelty: number; verdict: string; reason: string; weekly_cost?: { result: number; formula: string } }[]; picked: string[]; cached: boolean; skipped: boolean } | null;
+  verify: { accepted: string[]; rejected: { title: string; reasons: string[] }[] };
+};
+const GOAL_LABEL: Record<string, string> = { attract: "Attract", grow_sales: "Grow sales", retain: "Retain" };
 type Offer = { key: string; title: string; schedule: string; why: string; confidence: string | null };
 type Rejected = { kind: string; title: string; reasons: string[] };
 type Decision = { key: string; action: "keep" | "change" | "drop"; reason: string };
@@ -33,6 +40,7 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
   const rejected = (run.rejected as unknown as Rejected[] | null) ?? [];
   const decisions = (run.baselineDecisions as unknown as Decision[] | null) ?? [];
   const tools = (run.toolLog as unknown as ToolEntry[] | null) ?? [];
+  const stages = (run.stages as unknown as Stages | null) ?? null;
   const leadsRun = run.purpose === "leads";
   const chosen = leadsRun ? ((run.accepted as unknown as { pitches?: PitchEntry[]; skipped?: SkipEntry[] } | null) ?? {}) : {};
   const leadIds = [...(chosen.pitches ?? []), ...(chosen.skipped ?? [])].map((p) => p.lead_id);
@@ -84,6 +92,89 @@ export default async function AnalysisPage({ params }: { params: Promise<{ id: s
           </ul>
         )}
       </Card>
+      )}
+
+      {!leadsRun && stages && (
+        <Card className="flex flex-col gap-5 p-6">
+          <div>
+            <h2 className="text-lg font-bold">How the pipeline worked</h2>
+            <p className="text-sm text-muted">
+              Three AI stages, each checked by code: diagnose what is true, invent offers, judge them. Cached stages were reused from an earlier run at no cost.
+            </p>
+          </div>
+
+          <section className="flex flex-col gap-2">
+            <h3 className="font-bold">
+              1. Diagnose <span className="text-sm font-normal text-muted">{stages.diagnosis.findings.length} findings passed{stages.diagnosis.rejected.length ? `, ${stages.diagnosis.rejected.length} dropped` : ""}{stages.diagnosis.cached ? " · cached" : ""}</span>
+            </h3>
+            <ul className="flex flex-col gap-1.5 text-sm">
+              {stages.diagnosis.findings.map((f, i) => (
+                <li key={i} className="flex flex-col gap-0.5 border-t border-sand pt-1.5">
+                  <span>
+                    <Pill tone={f.kind === "weakness" ? "sun" : f.kind === "strength" ? "green" : "sand"}>{f.kind}</Pill> <strong className="ml-1">{f.title}</strong>
+                  </span>
+                  {f.calculations.map((c, k) => (
+                    <span key={k} className="text-[13px] text-muted">
+                      Worked out: {c.label} = <strong className="text-ink">{c.result}</strong> ({c.formula} with {c.inputs.map((x) => `${x.name} = ${x.value}`).join(", ")}; recomputed by code)
+                    </span>
+                  ))}
+                </li>
+              ))}
+              {stages.diagnosis.rejected.map((r, i) => (
+                <li key={`r${i}`} className="border-t border-sand pt-1.5 text-muted">
+                  <span className="line-through">{r.title}</span> · {r.reasons[0]}
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="flex flex-col gap-2">
+            <h3 className="font-bold">
+              2. Invent <span className="text-sm font-normal text-muted">{stages.strategy.candidates.length} candidates{stages.strategy.retried ? ", asked again once" : ""}{stages.strategy.cached ? " · cached" : ""}</span>
+              {stages.critique && !stages.critique.skipped && <span className="text-sm font-normal text-muted"> · 3. Judge: {stages.critique.picked.length} picked{stages.critique.cached ? " · cached" : ""}</span>}
+              {stages.critique?.skipped && <span className="text-sm font-normal text-muted"> · 3. Judge skipped: few enough to check directly</span>}
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="text-left text-muted">
+                    <th className="py-1 pr-2 font-semibold">Candidate</th>
+                    <th className="py-1 pr-2 font-semibold">For</th>
+                    <th className="py-1 pr-2 font-semibold">Acts on</th>
+                    <th className="py-1 pr-2 font-semibold">Idea</th>
+                    {stages.critique && !stages.critique.skipped && <th className="py-1 pr-2 text-right font-semibold">Lift · Cost · Fit · New</th>}
+                    <th className="py-1 font-semibold">Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stages.strategy.candidates.map((c) => {
+                    const sc = stages.critique?.scores.find((x) => x.key === c.key);
+                    const accepted = stages.verify.accepted.includes(c.title);
+                    const blocked = stages.verify.rejected.find((r) => r.title === c.title);
+                    const finding = stages.diagnosis.findings[c.answers_finding - 1]?.title ?? `finding ${c.answers_finding}`;
+                    return (
+                      <tr key={c.key} className={`border-t border-sand align-top ${accepted ? "" : "text-muted"}`}>
+                        <td className="py-1.5 pr-2">
+                          <span className={accepted ? "font-semibold text-ink" : ""}>{c.title}</span>
+                          {sc?.weekly_cost && <span className="block text-[12px]">≈ ${sc.weekly_cost.result} a week ({sc.weekly_cost.formula})</span>}
+                        </td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap">{GOAL_LABEL[c.goal] ?? c.goal}</td>
+                        <td className="py-1.5 pr-2">{finding}</td>
+                        <td className="py-1.5 pr-2 whitespace-nowrap">{c.idea_source ?? "original"}</td>
+                        {stages.critique && !stages.critique.skipped && (
+                          <td className="py-1.5 pr-2 text-right tabular-nums whitespace-nowrap">{sc ? `${sc.expected_lift} · ${sc.cost_efficiency} · ${sc.fit} · ${sc.novelty}` : "–"}</td>
+                        )}
+                        <td className="py-1.5">
+                          {accepted ? <Pill tone="green">In your inbox</Pill> : blocked ? <span title={blocked.reasons.join(" ")}>Blocked: {blocked.reasons[0]}</span> : sc?.verdict === "drop" ? `Dropped: ${sc.reason}` : "Not picked"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </Card>
       )}
 
       <div className="grid items-start gap-6 lg:grid-cols-2">

@@ -40,7 +40,12 @@ export interface AnalystModel {
   provider: string;
   model: string;
   /** oneShot: the run is expected to finish in one request, so its one-off data isn't worth caching. */
-  start(opts: { system: string; user: string; tools: ToolSpec[]; oneShot?: boolean }): AnalystSession;
+  /**
+   * cachedPrefix: text that several requests in a row share (the data the
+   * pipeline's stages all read); it goes first and is cached, so the second
+   * and later stages read it at a fraction of the price. `user` follows it.
+   */
+  start(opts: { system: string; user: string; tools: ToolSpec[]; oneShot?: boolean; cachedPrefix?: string }): AnalystSession;
 }
 
 // ---------- Claude ----------
@@ -52,8 +57,15 @@ export function claudeAnalyst(apiKey: string, model: string, effort?: "low" | "m
   return {
     provider: "anthropic",
     model,
-    start({ system, user, tools, oneShot }) {
+    start({ system, user, tools, oneShot, cachedPrefix }) {
       const messages: Anthropic.Beta.BetaMessageParam[] = [];
+      // The shared data block carries its own cache marker; the ask after it changes per stage.
+      const firstTurn: Anthropic.Beta.BetaMessageParam["content"] = cachedPrefix
+        ? [
+            { type: "text", text: cachedPrefix, cache_control: { type: "ephemeral" } },
+            { type: "text", text: user },
+          ]
+        : user;
       const toolDefs: Anthropic.Beta.BetaTool[] = tools.map((t) => ({
         name: t.name,
         description: t.description,
@@ -61,7 +73,7 @@ export function claudeAnalyst(apiKey: string, model: string, effort?: "low" | "m
       }));
       return {
         async send(input, signal) {
-          if (input === null) messages.push({ role: "user", content: user });
+          if (input === null) messages.push({ role: "user", content: firstTurn });
           else if ("nudge" in input) messages.push({ role: "user", content: input.nudge });
           else {
             // All results for one turn go back in a single user message.
@@ -120,7 +132,8 @@ export function ollamaAnalyst(baseUrl: string, model: string): AnalystModel {
   return {
     provider: "ollama",
     model,
-    start({ system, user, tools }) {
+    start({ system, user: ask, tools, cachedPrefix }) {
+      const user = cachedPrefix ? `${cachedPrefix}\n\n${ask}` : ask;
       const messages: OllamaMessage[] = [{ role: "system", content: system }];
       const toolDefs = tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
       let n = 0;
@@ -190,7 +203,8 @@ export function geminiAnalyst(apiKey: string, model: string): AnalystModel {
     get model() {
       return resolvedModel(model);
     },
-    start({ system, user, tools }) {
+    start({ system, user: ask, tools, cachedPrefix }) {
+      const user = cachedPrefix ? `${cachedPrefix}\n\n${ask}` : ask;
       const contents: GeminiContent[] = [];
       const declarations = tools.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.inputSchema }));
       let n = 0;

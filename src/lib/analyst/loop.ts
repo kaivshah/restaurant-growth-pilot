@@ -48,6 +48,12 @@ export interface LoopConfig<C, S> {
   oneShot?: boolean;
   /** Tools that may be prefetched but aren't offered to the model */
   prefetchTools?: ToolDef<unknown, C>[];
+  /**
+   * The request for this stage, sent after the data. With it, `user` + the
+   * prefetched data form a cached prefix that other stages of the same run
+   * share (same system, same data, different ask).
+   */
+  ask?: string;
   limits?: RunLimits;
 }
 
@@ -79,13 +85,15 @@ export async function runToolLoop<C, S>(model: AnalystModel, cfg: LoopConfig<C, 
     out.toolLog.push({ id, name: pre.name, input: pre.input ?? {}, output });
     data.push(`[${id}] ${pre.name}: ${JSON.stringify(output)}`);
   }
-  const user = data.length
+  const withData = data.length
     ? `${cfg.user}\n\nData already looked up for you. Each line starts with its tool call id in brackets; cite that id in evidence.\n${data.join("\n")}`
     : cfg.user;
+  const user = cfg.ask ? cfg.ask : withData;
 
   const session = model.start({
     system: cfg.system,
     user,
+    cachedPrefix: cfg.ask ? withData : undefined,
     oneShot: cfg.oneShot,
     tools: [
       ...cfg.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),

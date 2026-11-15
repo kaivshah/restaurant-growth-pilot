@@ -366,6 +366,8 @@ model AnalysisRun {
   rejected          Json?
   /// What the AI decided about each standard idea (keep / change / drop)
   baselineDecisions Json?
+  /// The pipeline's stages (findings, candidates, critic scores), for the analysis page
+  stages            Json?
   /// Every tool call: name, input, output
   toolLog           Json?
   toolCalls         Int            @default(0)

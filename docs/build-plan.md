@@ -59,7 +59,7 @@ Two further dials if needed: `medium` effort everywhere (~$6/month); merge Diagn
 | # | Phase | Status |
 |---|---|---|
 | 1 | Menu and item data | done (2026-11-15) |
-| 3 | The pipeline (Diagnostician → Strategist → Critic → Verifier → Copywriter) | pending |
+| 3 | The pipeline (Diagnostician → Strategist → Critic → Verifier → Copywriter) | done (2026-11-15) |
 | 2 | Owner voice, calendar and freedom | pending |
 | 4 | Offer lifecycle and the results loop | pending |
 | 5 | Catering upgrades | pending |

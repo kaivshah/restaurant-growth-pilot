@@ -6,6 +6,7 @@ import { LATEST_FLASH } from "@/lib/llm/gemini";
 import { fakeAnalyst } from "./fake";
 import { fakeLeadAnalyst } from "./leads/fake";
 import { fakeCateringAnalyst } from "./catering-fake";
+import { fakePipeline } from "./pipeline/fake";
 import { CLAUDE_DEFAULT_MODEL } from "@/lib/llm/claude";
 import { type AnalystModel, claudeAnalyst, geminiAnalyst, ollamaAnalyst } from "./models";
 import type { AnalysisOutcome } from "./run";
@@ -13,6 +14,8 @@ import { similar } from "./verify";
 
 export type { AnalystContext } from "./context";
 export { runAnalysis } from "./run";
+export { runPipeline } from "./pipeline";
+export type { PipelineOutcome, Stages } from "./pipeline";
 export { runLeadAnalysis } from "./leads";
 export type { LeadContext, LeadInfo, EventInfo, LeadOutcome, Pitch } from "./leads";
 export type { AnalysisOutcome, Rejected } from "./run";
@@ -44,7 +47,7 @@ export function analystFromEnv(purpose: "offers" | "leads" | "catering" = "offer
   if (choice === "ollama") {
     return ollamaAnalyst(env.OLLAMA_URL || "http://localhost:11434", env.ANALYST_MODEL || env.OLLAMA_MODEL || "qwen2.5:7b-instruct");
   }
-  if (choice === "fake" && env.NODE_ENV !== "production") return purpose === "leads" ? fakeLeadAnalyst() : purpose === "catering" ? fakeCateringAnalyst() : fakeAnalyst();
+  if (choice === "fake" && env.NODE_ENV !== "production") return purpose === "leads" ? fakeLeadAnalyst() : purpose === "catering" ? fakeCateringAnalyst() : purpose === "offers" ? fakePipeline() : fakeAnalyst();
   return null;
 }
 
