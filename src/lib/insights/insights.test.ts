@@ -55,7 +55,7 @@ const PRIVATE_FILES = [
 describe.runIf(PRIVATE_FILES.every((f) => existsSync(join(PRIVATE, f))))("insights for the pilot store (private)", () => {
   it("matches the numbers in the brainstorm document", async () => {
     const ins = computeInsights(await loadAll(PRIVATE, PRIVATE_FILES));
-    expect(ins.hourly?.lunchShare).toBe(41);
+    expect(ins.hourly?.lunchShare).toBe(36); // lunch is 11 am–2 pm (the brainstorm used noon–3 pm: 41)
     expect(ins.hourly?.weekSales).toBe(7621.47);
     expect(ins.drinkPct).toBe(38);
     expect(ins.drinkPrice).toBe(2.5);

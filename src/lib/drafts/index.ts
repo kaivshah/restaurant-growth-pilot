@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { AiBusyError, AiConfigError, type FactsPacket, type CallLog, missingAiReason, providerFromEnv, writeOfferCopy } from "@/lib/llm";
 import { type OfferCandidate, isBrandSafe } from "@/lib/offers";
 import type { ParsedReport } from "@/lib/reports";
+import { inventoryLineNames, loadMenuContext } from "@/lib/menu";
 
 /** Most new drafts one restaurant can get per day, to keep AI costs predictable. */
 export const DAILY_DRAFT_CAP = Number(process.env.DAILY_DRAFT_CAP ?? 40);
@@ -64,10 +65,13 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
     orderBy: { decidedAt: "desc" },
     take: 30,
   });
+  const parsed = rows.map((r) => r.data as unknown as ParsedReport);
+  const menuCtx = await loadMenuContext(restaurant.id, inventoryLineNames(parsed));
   const ctx: AnalystContext = buildContext(
     restaurant,
     rows.map((r) => ({ report: r.data as unknown as ParsedReport, status: r.status === "CONFIRMED" ? "CONFIRMED" : "READ" })),
     decisions.map((d) => ({ title: d.title, status: d.status as "APPROVED" | "SKIPPED", skipReason: d.skipReason, source: d.source })),
+    menuCtx,
   );
   const dataHash = createHash("sha256")
     .update(
@@ -78,6 +82,7 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
         reports: rows.map((r) => [r.id, r.status]),
         rules: ctx.rules,
         restaurant: ctx.restaurant,
+        menu: menuCtx.hash,
         decisions: decisions.map((d) => [d.id, d.status, d.skipReason]),
       }),
     )

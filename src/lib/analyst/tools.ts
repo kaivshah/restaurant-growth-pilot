@@ -1,5 +1,7 @@
 import { z } from "zod";
 import type { ExtraTableReport, ParsedReport } from "@/lib/reports";
+import { mapByName } from "@/lib/menu/inventory";
+import { DAY_PARTS } from "@/lib/insights/dayparts";
 import { REPORT_LABELS } from "@/lib/reports";
 import { type AnalystContext, pick, sourceLabel, weeksOf } from "./context";
 
@@ -99,7 +101,7 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
   tool({
     name: "get_hourly_sales",
     description:
-      "Sales, units, customers and average ticket by hour from the day-part report. Give `day` (Mon…Sun) for one day, or omit it for the whole week. Each row includes its share of the week's (or day's) sales.",
+      "Sales, units, customers and average ticket by hour from the day-part report, with day-part totals. Omit `day` for the whole week: the answer then also has by_day, each hour's sales for every weekday (same order as days), so a slow Tuesday 3 pm or a strong Friday lunch can be seen without another call. Give `day` (Mon…Sun) for one day's full detail.",
     inputSchema: {
       type: "object",
       properties: { week: WEEK, day: { type: "string", enum: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] } },
@@ -125,17 +127,23 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
           avg_ticket: r2(r.avgTicket),
           share_pct: total ? r1((r.sales / total) * 100) : 0,
         }));
-      const parts = [
-        { name: "morning (before 11 am)", hours: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
-        { name: "lunch (11 am–2 pm)", hours: [11, 12, 13] },
-        { name: "afternoon (2–5 pm)", hours: [14, 15, 16] },
-        { name: "dinner (5–8 pm)", hours: [17, 18, 19] },
-        { name: "late (8 pm onwards)", hours: [20, 21, 22, 23] },
-      ].map((p) => {
-        const sales = dp.hours.filter((h) => p.hours.includes(h.hour24)).reduce((s, h) => s + cellOf(h).sales, 0);
+      const parts = DAY_PARTS.map((p) => {
+        const sales = dp.hours.filter((h) => (p.hours as readonly number[]).includes(h.hour24)).reduce((s, h) => s + cellOf(h).sales, 0);
         return { part: p.name, sales: r2(sales), share_pct: total ? r1((sales / total) * 100) : 0 };
       });
-      return { source: sourceLabel(dp), day: day ?? "whole week", total_sales: r2(total), day_parts: parts, rows };
+      if (di >= 0) return { source: sourceLabel(dp), day, total_sales: r2(total), day_parts: parts, rows };
+      // Whole week: each open hour's sales per weekday, so one call shows the week's shape.
+      const open = dp.hours.filter((h) => h.week.sales !== 0 || h.week.customers !== 0);
+      return {
+        source: sourceLabel(dp),
+        day: "whole week",
+        total_sales: r2(total),
+        day_parts: parts,
+        rows,
+        days: dp.days,
+        day_totals: dp.dayTotals.map((d) => Math.round(d.sales)),
+        by_day: open.map((h) => ({ hour: h.label, sales: h.byDay.map((c) => Math.round(c.sales)) })),
+      };
     },
   }),
 
@@ -168,6 +176,26 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     parse: () => ({}),
     run: (ctx) => weeklyTrend(ctx),
+  }),
+
+  tool({
+    name: "get_menu",
+    description: "The store's menu with its local prices, by category, and catering platters with servings. Only items listed here may be named, given away or discounted; use these prices as retail values.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parse: () => ({}),
+    run: (ctx) =>
+      ctx.menu.priced
+        ? { source: "Your menu (Settings → Menu & prices)", priced_items: ctx.menu.priced, lines: ctx.menu.lines, catering: ctx.menu.items.filter((i) => i.isCatering).map((i) => ({ item: i.name, size: i.size, price: i.price, serves: i.serves })) }
+        : { error: "No menu prices yet: the owner hasn't filled in the menu. Use only values the reports give (average drink and sandwich prices)." },
+  }),
+
+  tool({
+    name: "get_item_sales",
+    description:
+      "What sells and what it earns, per typical week, from the inventory report linked to the menu: sellable items (chips, cookies, drinks) with units used, unit cost, menu price and margin per unit; proteins by usage (which subs sell most); and the lines with the biggest waste. Replaces guessing from names.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parse: () => ({}),
+    run: (ctx) => itemSales(ctx),
   }),
 
   tool({
@@ -298,29 +326,6 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
   }),
 
   tool({
-    name: "get_item_costs",
-    description: "What the store pays per unit for items (e.g. cookies, chips, bottled drinks), from the inventory items report.",
-    inputSchema: {
-      type: "object",
-      properties: { items: { type: "array", items: { type: "string" }, maxItems: 10 } },
-      required: ["items"],
-      additionalProperties: false,
-    },
-    parse: (i) => z.object({ items: z.array(z.string()).max(10) }).parse(i),
-    run: (ctx, { items }) => {
-      const inv = pick(ctx, "wisrInventoryItems");
-      if (!inv) return noData("inventory items report");
-      return {
-        source: sourceLabel(inv),
-        items: items.map((q) => {
-          const hit = inv.items.find((i) => !i.isSubtotal && i.item.toLowerCase().includes(q.toLowerCase()));
-          return hit ? { query: q, item: hit.item, unit_cost: hit.unitCost } : { query: q, item: null, unit_cost: null };
-        }),
-      };
-    },
-  }),
-
-  tool({
     name: "get_bread_over_short",
     description: "Bread over (+) or short (−) by day from the WISR daily cash/bread report. Positive means more bread on hand than sales account for.",
     inputSchema: { type: "object", properties: { week: WEEK }, additionalProperties: false },
@@ -436,6 +441,53 @@ function dailySales(ctx: AnalystContext) {
   };
 }
 
+/** Sellable items with margin, proteins by usage, and waste: the inventory report read through the menu. */
+function itemSales(ctx: AnalystContext) {
+  const inv = pick(ctx, "wisrInventoryItems");
+  if (!inv) return noData("inventory items report");
+  const lines = inv.items.filter((i) => !i.isSubtotal && (i.used ?? 0) !== 0);
+  // Lines the mapping step hasn't seen yet are matched by name for now.
+  const link = (name: string) => ctx.inventoryMap[name] ?? mapByName(name, ctx.menu);
+  const priceOf = (menuKey: string | null) => {
+    if (!menuKey) return null;
+    const [name, size] = menuKey.split("|");
+    return ctx.menu.items.find((m) => m.name === name && m.size === (size ?? ""))?.price ?? null;
+  };
+  const sellables = lines
+    .filter((i) => link(i.item)?.kind === "sellable")
+    .map((i) => {
+      const price = priceOf(link(i.item)?.menu ?? null);
+      const margin = price != null && i.unitCost != null ? r2(price - i.unitCost) : null;
+      return {
+        line: i.item,
+        menu_item: link(i.item)?.menu?.replace("|", " ").trim() ?? null,
+        units_per_week: r1(i.used ?? 0),
+        unit_cost: i.unitCost,
+        menu_price: price,
+        margin_per_unit: margin,
+        margin_per_week: margin != null ? r2(margin * (i.used ?? 0)) : null,
+      };
+    })
+    .sort((a, b) => b.units_per_week - a.units_per_week);
+  const proteins = lines.filter((i) => link(i.item)?.kind === "protein");
+  const proteinTotal = proteins.reduce((s, i) => s + (i.usedDollars ?? 0), 0);
+  const unmapped = lines.filter((i) => !ctx.inventoryMap[i.item]).length;
+  return {
+    source: [sourceLabel(inv), ctx.menu.priced ? "Your menu prices" : "No menu prices yet"].join("; "),
+    sellable_items: sellables.slice(0, 25),
+    proteins_by_usage: proteins
+      .map((i) => ({ line: i.item, used_per_week: r1(i.used ?? 0), used_dollars: i.usedDollars, share_of_protein_cost_pct: proteinTotal ? r1(((i.usedDollars ?? 0) / proteinTotal) * 100) : null }))
+      .sort((a, b) => (b.used_dollars ?? 0) - (a.used_dollars ?? 0))
+      .slice(0, 15),
+    biggest_waste: lines
+      .filter((i) => (i.diffDollars ?? 0) < 0)
+      .sort((a, b) => (a.diffDollars ?? 0) - (b.diffDollars ?? 0))
+      .slice(0, 8)
+      .map((i) => ({ line: i.item, kind: link(i.item).kind, dollars_over: r2(Math.abs(i.diffDollars ?? 0)) })),
+    lines_not_yet_linked: unmapped,
+  };
+}
+
 const TREND_LIMIT = 8;
 
 function weeklyTrend(ctx: AnalystContext) {
@@ -466,7 +518,6 @@ function weeklyTrend(ctx: AnalystContext) {
   return { source: `Your weekly reports, ${ends[0]} to ${ends.at(-1)}`, weeks: rows.length, rows, change_first_to_last_pct };
 }
 
-const ADD_ON = /cookie|chip|drink|cup|bottle|water|soda|juice|dessert|brownie|side|apple|soup|kids|bag/i;
 
 function salesMix(ctx: AnalystContext) {
   const units = pick(ctx, "wisrUnits");
@@ -489,9 +540,10 @@ function salesMix(ctx: AnalystContext) {
   const catering = units
     ? Object.entries(units.catering).map(([kind, v]) => ({ kind, quantity: r1(v.qty), dollars: r2(v.dollars) }))
     : [];
+  const sellable = (name: string) => (ctx.inventoryMap[name] ?? mapByName(name, ctx.menu)).kind === "sellable";
   const addOns = items
     ? items.items
-        .filter((i) => !i.isSubtotal && ADD_ON.test(i.item) && (i.used ?? 0) > 0)
+        .filter((i) => !i.isSubtotal && sellable(i.item) && (i.used ?? 0) > 0)
         .sort((a, b) => (b.usedDollars ?? 0) - (a.usedDollars ?? 0))
         .slice(0, 12)
         .map((i) => ({ item: i.item, used_per_week: r1(i.used ?? 0), unit_cost: i.unitCost, used_dollars: i.usedDollars === null ? null : r2(i.usedDollars) }))

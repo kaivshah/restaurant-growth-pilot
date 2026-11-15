@@ -15,6 +15,7 @@ import { INDEPENDENT_LINE } from "@/lib/llm/validate";
 import { isBrandSafe } from "@/lib/offers";
 import { type Place, type PlacesProvider, SEARCHES, placesFromEnv } from "@/lib/places";
 import type { ParsedReport } from "@/lib/reports";
+import { loadMenuContext } from "@/lib/menu";
 import { EVENT_WINDOW_DAYS, categoryLabel, scoreEvent, scoreLead } from "./score";
 
 /** Google's terms: Place content is refreshed or removed after 30 days. */
@@ -437,10 +438,12 @@ async function leadContext(restaurant: Restaurant, now: Date) {
     usableReports(restaurant.id),
     db.draft.findMany({ where: { restaurantId: restaurant.id, kind: "CATERING_PITCH", status: { in: ["APPROVED", "SKIPPED"] } }, orderBy: { decidedAt: "desc" }, take: 30 }),
   ]);
+  const menuCtx = await loadMenuContext(restaurant.id, [], false);
   const base = buildContext(
     restaurant,
     rows.map((r) => ({ report: r.data as unknown as ParsedReport, status: r.status === "CONFIRMED" ? "CONFIRMED" : "READ" })),
     decisions.map((d) => ({ title: d.title, status: d.status as "APPROVED" | "SKIPPED", skipReason: d.skipReason, source: d.source })),
+    menuCtx,
   );
   const leads = [...(daily?.leads ?? []), ...excluded.map(toLeadInfo)];
   const ctx: LeadContext = { ...base, leads, events: daily?.events ?? [], brief: daily?.brief ?? [] };

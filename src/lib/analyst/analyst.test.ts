@@ -47,6 +47,8 @@ function ctxFor(reports: ParsedReport[], rules: Partial<AnalystContext["rules"]>
     },
     reports: reports.map((report) => ({ report, status: "CONFIRMED" as const })),
     pastDecisions: [],
+    menu: { priced: 0, total: 0, lines: [], items: [] },
+    inventoryMap: {},
   };
 }
 
@@ -72,7 +74,9 @@ describe("data tools", () => {
     expect(sat.day).toBe("Sat");
 
     expect(run(ctx, "get_bread_over_short").total_bread).toBe(173);
-    expect((run(ctx, "get_item_costs", { items: ["chips"] }).items as { unit_cost: number }[])[0].unit_cost).toBe(0.7);
+    const sales = run(ctx, "get_item_sales") as { sellable_items: { line: string; unit_cost: number; menu_price: number | null }[]; proteins_by_usage: { line: string }[] };
+    expect(sales.sellable_items[0]).toMatchObject({ line: "Chips", unit_cost: 0.7, menu_price: null }); // no menu prices in this context
+    expect(sales.proteins_by_usage.map((p) => p.line)).toEqual(["Turkey"]);
     expect(run(ctx, "estimate_offer_cost", { mechanic: "free_item", value_usd: 2.5 })).toMatchObject({ value_pct_of_ticket: 20, within_limit: false });
     expect(run(ctx, "get_rules")).toMatchObject({ max_discount_pct: 15, brand_safe_mode: true });
     expect(run(ctx, "compare_weeks", { metric: "net_sales", week_a: "2026-03-10", week_b: "2026-03-10" })).toMatchObject({ change: 0 });
@@ -362,5 +366,21 @@ describe("optional reports and the store report", () => {
     expect(report.week?.net_sales).toBeTypeOf("number");
     expect(report.highlights.length).toBeGreaterThan(2);
     expect(report.highlights.map((h) => h.title).join(" ")).toMatch(/slowest daytime hour|weakest day/);
+  });
+});
+
+describe("item sales through the menu", () => {
+  it("prices sellable inventory lines from the menu and reports margins", async () => {
+    const reports = await load(SAMPLE, SAMPLE_FILES);
+    const ctx = ctxFor(reports);
+    ctx.menu = { priced: 1, total: 1, lines: ["Sides: Chips $1.99"], items: [{ category: "Sides", name: "Chips", size: "", price: 1.99, cost: null, isCatering: false, serves: null }] };
+    ctx.inventoryMap = { Chips: { kind: "sellable", menu: "Chips|" }, Turkey: { kind: "protein", menu: null }, "Cheese, Sliced cheese": { kind: "ingredient", menu: null } };
+    const out = run(ctx, "get_item_sales") as { sellable_items: Record<string, unknown>[]; lines_not_yet_linked: number; biggest_waste: { line: string; kind: string }[] };
+    expect(out.sellable_items[0]).toMatchObject({ line: "Chips", menu_item: "Chips", unit_cost: 0.7, menu_price: 1.99, margin_per_unit: 1.29, units_per_week: 350, margin_per_week: 451.5 });
+    expect(out.lines_not_yet_linked).toBe(0);
+    expect(out.biggest_waste.map((w) => w.kind)).toContain("ingredient");
+    expect(run(ctx, "get_menu")).toMatchObject({ priced_items: 1, lines: ["Sides: Chips $1.99"] });
+    const { prefetchFor } = await import("./run");
+    expect(prefetchFor(ctx).map((p) => p.name)).toEqual(expect.arrayContaining(["get_menu", "get_item_sales"]));
   });
 });

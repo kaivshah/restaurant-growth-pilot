@@ -8,6 +8,7 @@ import type {
   WisrSalesReport,
   WisrUnitsReport,
 } from "@/lib/reports";
+import { AFTERNOON_HOURS, LUNCH_HOURS } from "./dayparts";
 
 /**
  * Plain calculations from a store's confirmed reports. No AI here: every
@@ -36,11 +37,11 @@ export interface Insights {
   hourly: {
     bars: HourBar[];
     weekSales: number;
-    /** Share of the week's sales in the 12 PM, 1 PM and 2 PM rows (noon–3 pm) */
+    /** Share of the week's sales in the lunch hours (11 am–2 pm, see dayparts.ts) */
     lunchShare: number;
-    /** 3 PM + 4 PM rows (3–5 pm), Monday–Friday only */
+    /** Afternoon hours (2–5 pm), Monday–Friday only */
     weekdayAfternoonSales: number;
-    /** Average sales of one lunch hour vs one 3–5 pm hour, weekdays */
+    /** Average sales of one lunch hour vs one afternoon hour, weekdays */
     lunchHourAvg: number;
     afternoonHourAvg: number;
   } | null;
@@ -208,8 +209,8 @@ function hourly(day: DayPartReport): Insights["hourly"] {
       .filter((h) => hours.includes(h.hour24))
       .reduce((s, h) => s + weekdayIdx.reduce((t, i) => t + h.byDay[i].sales, 0), 0);
 
-  const lunch = [12, 13, 14];
-  const afternoon = [15, 16];
+  const lunch = [...LUNCH_HOURS];
+  const afternoon = [...AFTERNOON_HOURS];
   const weekdayCount = Math.max(1, weekdayIdx.length);
   return {
     bars,

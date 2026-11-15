@@ -1,5 +1,7 @@
 import type { OfferCandidate } from "@/lib/offers";
-import type { AnalystContext } from "./context";
+import { type AnalystContext, EMPTY_MENU } from "./context";
+import type { MenuFacts } from "@/lib/menu";
+import type { InventoryMap } from "@/lib/menu/inventory";
 import { LATEST_FLASH } from "@/lib/llm/gemini";
 import { fakeAnalyst } from "./fake";
 import { fakeLeadAnalyst } from "./leads/fake";
@@ -75,6 +77,7 @@ export function buildContext(
   restaurant: AnalystContext["restaurant"] & AnalystContext["rules"],
   reports: AnalystContext["reports"],
   pastDecisions: AnalystContext["pastDecisions"],
+  extras: { menu?: MenuFacts; inventoryMap?: InventoryMap } = {},
 ): AnalystContext {
   return {
     restaurant: {
@@ -96,5 +99,7 @@ export function buildContext(
     },
     reports,
     pastDecisions,
+    menu: extras.menu ?? EMPTY_MENU,
+    inventoryMap: extras.inventoryMap ?? {},
   };
 }

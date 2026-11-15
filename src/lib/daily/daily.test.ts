@@ -24,7 +24,7 @@ describe("store brief", () => {
     expect(brief.length).toBeGreaterThanOrEqual(5);
     expect(brief.length).toBeLessThanOrEqual(10);
     expect(text).toMatch(/Weekly net sales about \$/);
-    expect(text).toMatch(/Lunch \(noon–3 pm\) brings \d+% of sales/);
+    expect(text).toMatch(/Lunch \(11 am–2 pm\) brings \d+% of sales/);
     expect(text).toMatch(/Quietest daytime hours: /);
     expect(text).toMatch(/Catering: from 10 people, delivered within 3 mi; open Mon–Sun/);
     // Short enough to send with every request.

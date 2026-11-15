@@ -2,6 +2,7 @@ import type { MenuItem } from "@prisma/client";
 import { z } from "zod/v4";
 import { db } from "@/lib/db";
 import { csvToGrid } from "@/lib/reports/cells";
+import type { ParsedReport } from "@/lib/reports";
 import { MENU_CATEGORIES, seedRows } from "./catalogue";
 
 export { MENU_CATEGORIES } from "./catalogue";
@@ -162,4 +163,24 @@ export function menuHash(items: MenuItem[]): string {
     .map((i) => `${i.name}|${i.size}|${i.price ?? ""}|${i.cost ?? ""}`)
     .sort()
     .join("\n");
+}
+
+/**
+ * The menu facts and inventory links for a store, for the analyst context.
+ * New inventory lines are linked on the way (one small AI request, cached
+ * for good), unless `mapNew` is false (pages that must not call the AI).
+ */
+export async function loadMenuContext(restaurantId: string, inventoryLines: string[] = [], mapNew = true) {
+  const { ensureInventoryMap, loadInventoryMap } = await import("./inventory");
+  const items = await ensureMenu(restaurantId);
+  const menu = menuFacts(items);
+  const inventoryMap = mapNew && inventoryLines.length ? await ensureInventoryMap(restaurantId, inventoryLines, menu) : await loadInventoryMap(restaurantId);
+  return { menu, inventoryMap, hash: menuHash(items) };
+}
+
+/** The inventory report's line names across the uploaded weeks (not subtotals). */
+export function inventoryLineNames(reports: ParsedReport[]): string[] {
+  const names = new Set<string>();
+  for (const r of reports) if (r.type === "wisrInventoryItems") for (const i of r.items) if (!i.isSubtotal && i.item) names.add(i.item);
+  return [...names];
 }

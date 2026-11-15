@@ -3,8 +3,10 @@ import type { Restaurant } from "@prisma/client";
 import type { EventInfo, LeadInfo } from "@/lib/analyst";
 import { db } from "@/lib/db";
 import { type Insights, computeInsights } from "@/lib/insights";
+import { LUNCH_LABEL } from "@/lib/insights/dayparts";
 import { nextPacificMidnight, pacificDay } from "@/lib/llm/usage";
 import type { ParsedReport } from "@/lib/reports";
+import { type MenuFacts, loadMenuContext, menuHash } from "@/lib/menu";
 
 /**
  * The day's working set for the AI, built once and reused all day:
@@ -40,7 +42,7 @@ const hourName = (h: number) => (h === 0 ? "12 am" : h < 12 ? `${h} am` : h === 
  * can prepare catering), the lunch peak, catering's share so far, and how
  * much is already given away in discounts.
  */
-export function storeBrief(ins: Insights, restaurant: Pick<Restaurant, "minCateringOrder" | "radiusMiles" | "openingHours">): string[] {
+export function storeBrief(ins: Insights, restaurant: Pick<Restaurant, "minCateringOrder" | "radiusMiles" | "openingHours">, menu?: MenuFacts): string[] {
   const out: string[] = [];
   const weeks = Math.max(ins.weeks.dayPart, ins.weeks.wisr);
   if (weeks > 1) out.push(`Numbers are weekly averages over the last ${weeks} weeks of reports.`);
@@ -53,7 +55,7 @@ export function storeBrief(ins: Insights, restaurant: Pick<Restaurant, "minCater
     const open = ins.hourly.bars.filter((b) => b.sales > 0);
     const peak = [...open].sort((a, b) => b.sales - a.sales)[0];
     const quiet = open.filter((b) => b.hour24 >= 9 && b.hour24 <= 17).sort((a, b) => a.sales - b.sales).slice(0, 2).sort((a, b) => a.hour24 - b.hour24);
-    out.push(`Lunch (noon–3 pm) brings ${ins.hourly.lunchShare}% of sales${peak ? `; the busiest hour is ${hourName(peak.hour24)}` : ""}.`);
+    out.push(`Lunch (${LUNCH_LABEL}) brings ${ins.hourly.lunchShare}% of sales${peak ? `; the busiest hour is ${hourName(peak.hour24)}` : ""}.`);
     if (quiet.length) out.push(`Quietest daytime hours: ${quiet.map((b) => hourName(b.hour24)).join(" and ")}, good for preparing catering orders.`);
   }
   if (ins.days) out.push(`Busiest day ${ins.days.busiest.day}; weekdays average ${money(ins.days.weekdayAvg)} a day, weekends ${money(ins.days.weekendAvg)}.`);
@@ -61,6 +63,10 @@ export function storeBrief(ins: Insights, restaurant: Pick<Restaurant, "minCater
   if (ins.discountPctOfSales != null) out.push(`Discounts already give away ${ins.discountPctOfSales}% of sales, so new deals should be targeted.`);
   if (ins.bread?.weekendSurplus) out.push(`Extra bread left over at weekends (${ins.bread.weekendSurplus} pieces).`);
   out.push(`Catering: from ${restaurant.minCateringOrder} people, delivered within ${restaurant.radiusMiles} mi${restaurant.openingHours ? `; open ${restaurant.openingHours}` : ""}.`);
+  if (menu?.priced) {
+    const cat = menu.items.filter((i) => i.isCatering);
+    out.push(`Menu: ${menu.priced} priced items${cat.length ? `; catering: ${cat.slice(0, 6).map((c) => `${c.name}${c.size ? ` ${c.size}` : ""} $${c.price.toFixed(2)}${c.serves ? ` (serves ${c.serves})` : ""}`).join(", ")}` : "; no catering prices yet"}.`);
+  }
   return out;
 }
 
@@ -75,7 +81,7 @@ async function sourcesHash(restaurant: Restaurant) {
   const rules = [restaurant.minCateringOrder, restaurant.radiusMiles, restaurant.openingHours, restaurant.allowFreeExtra, restaurant.allowFreeDelivery, restaurant.maxDiscountPct];
   const leadsChanged = await db.lead.aggregate({ where: { restaurantId: restaurant.id }, _max: { updatedAt: true }, _count: true });
   return createHash("sha256")
-    .update(JSON.stringify({ reports, scan: scan?.id, rules, leads: [leadsChanged._count, leadsChanged._max.updatedAt] }))
+    .update(JSON.stringify({ reports, scan: scan?.id, rules, menu: menuHash(await db.menuItem.findMany({ where: { restaurantId: restaurant.id } })), leads: [leadsChanged._count, leadsChanged._max.updatedAt] }))
     .digest("hex")
     .slice(0, 16);
 }
@@ -105,7 +111,7 @@ export async function dailyContext(restaurantId: string, now = new Date()): Prom
     day,
     hash,
     builtAt: now.toISOString(),
-    brief: reports.length ? storeBrief(computeInsights(reports.map((r) => r.data as unknown as ParsedReport)), restaurant) : [],
+    brief: reports.length ? storeBrief(computeInsights(reports.map((r) => r.data as unknown as ParsedReport)), restaurant, (await loadMenuContext(restaurantId, [], false)).menu) : [],
     leads: leads.map(toLeadInfo),
     events: events.map((e) => toEventInfo(e, now)),
   };

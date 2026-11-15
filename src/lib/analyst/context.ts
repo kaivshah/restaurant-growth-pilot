@@ -1,6 +1,8 @@
 import type { ParsedReport, ReportType } from "@/lib/reports";
 import { REPORT_LABELS } from "@/lib/reports";
 import { averagedReport } from "@/lib/insights";
+import type { MenuFacts } from "@/lib/menu";
+import type { InventoryMap } from "@/lib/menu/inventory";
 
 /** Everything the analyst's tools can read. Built once per run from Postgres. */
 export interface AnalystContext {
@@ -23,7 +25,13 @@ export interface AnalystContext {
   };
   reports: { report: ParsedReport; status: "READ" | "CONFIRMED" }[];
   pastDecisions: { title: string; status: "APPROVED" | "SKIPPED"; skipReason: string | null; source: string }[];
+  /** The store's menu with local prices (empty until the owner fills it in) */
+  menu: MenuFacts;
+  /** Inventory report lines linked to menu items and kinds */
+  inventoryMap: InventoryMap;
 }
+
+export const EMPTY_MENU: MenuFacts = { priced: 0, total: 0, lines: [], items: [] };
 
 const fmt = (iso: string) =>
   new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });

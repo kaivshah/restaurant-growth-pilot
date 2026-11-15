@@ -3,6 +3,7 @@ import { ButtonLink, Card, Notice, Pill } from "@/components/ui";
 import { buildContext } from "@/lib/analyst";
 import { buildStoreReport } from "@/lib/analyst/report";
 import { db } from "@/lib/db";
+import { loadMenuContext } from "@/lib/menu";
 import { usableReports } from "@/lib/drafts";
 import type { ParsedReport } from "@/lib/reports";
 import { requireRestaurant } from "@/lib/restaurant";
@@ -57,10 +58,12 @@ export default async function StoreReportPage() {
     db.draft.count({ where: { restaurantId: restaurant.id, status: "PENDING" } }),
     db.analysisRun.findFirst({ where: { restaurantId: restaurant.id, purpose: "offers", status: "DONE" }, orderBy: { createdAt: "desc" } }),
   ]);
+  const menuCtx = await loadMenuContext(restaurant.id, [], false);
   const ctx = buildContext(
     restaurant,
     rows.map((r) => ({ report: r.data as unknown as ParsedReport, status: r.status === "CONFIRMED" ? "CONFIRMED" : "READ" })),
     [],
+    menuCtx,
   );
   const r = buildStoreReport(ctx);
   const findings = ((lastRun?.findings as unknown as Finding[] | null) ?? []).slice(0, 6);

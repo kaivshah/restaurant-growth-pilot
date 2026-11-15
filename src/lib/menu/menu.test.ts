@@ -41,3 +41,19 @@ describe("menu", () => {
     expect(menuHash(items.map((i) => (i.id === "3" ? { ...i, price: 1.49 } : i)))).not.toBe(h1);
   });
 });
+
+describe("inventory lines linked to the menu", () => {
+  it("sorts lines by name when no AI is available, and links sellables to menu items", async () => {
+    const { mapByName } = await import("./inventory");
+    const menu = menuFacts([
+      { id: "1", restaurantId: "", category: "Sides", name: "Chips", size: "", price: 1.99, cost: null, isCatering: false, servesMin: null, servesMax: null, active: true, source: "OWNER", sortOrder: 0, inventoryNames: [], createdAt: new Date(), updatedAt: new Date() },
+      { id: "2", restaurantId: "", category: "Sides", name: "Cookie", size: "", price: 1.29, cost: null, isCatering: false, servesMin: null, servesMax: null, active: true, source: "OWNER", sortOrder: 0, inventoryNames: [], createdAt: new Date(), updatedAt: new Date() },
+    ]);
+    expect(mapByName("Chips", menu)).toEqual({ kind: "sellable", menu: "Chips|" });
+    expect(mapByName("Cookies, Chocolate Chip", menu)).toEqual({ kind: "sellable", menu: "Cookie|" });
+    expect(mapByName("Turkey", menu)).toEqual({ kind: "protein", menu: null });
+    expect(mapByName("Cheese, Sliced cheese", menu)).toEqual({ kind: "ingredient", menu: null });
+    expect(mapByName("Napkins", menu)).toEqual({ kind: "supply", menu: null });
+    expect(mapByName("Bottled Water 20oz", menu)).toEqual({ kind: "sellable", menu: null }); // sold, but not on this menu yet
+  });
+});

@@ -28,9 +28,12 @@ async function main() {
       console.log(`  ${label.padEnd(36)} ${String(c.used).padStart(2)} of ${c.uploaded} ${c.start ? `${c.start} – ${c.end}` : ""}${c.newestOnly ? "   <- weeks don't line up: newest only" : ""}`);
     }
 
-    const ctx = buildContext(r, used.map((u) => ({ report: u.data as unknown as ParsedReport, status: u.status === "CONFIRMED" ? "CONFIRMED" : "READ" })), []);
+    const { loadMenuContext } = await import("@/lib/menu");
+    const menuCtx = await loadMenuContext(r.id, [], false);
+    console.log(`\n  Menu: ${menuCtx.menu.priced} priced items, ${Object.keys(menuCtx.inventoryMap).length} inventory lines linked`);
+    const ctx = buildContext(r, used.map((u) => ({ report: u.data as unknown as ParsedReport, status: u.status === "CONFIRMED" ? "CONFIRMED" : "READ" })), [], menuCtx);
     console.log("\n  Sources in the AI's first request:");
-    for (const name of ["get_week_summary", "get_hourly_sales", "get_day_totals", "get_weekly_trend", "get_sales_mix", "get_daily_sales"]) {
+    for (const name of ["get_week_summary", "get_hourly_sales", "get_day_totals", "get_weekly_trend", "get_sales_mix", "get_item_sales", "get_menu", "get_daily_sales"]) {
       const t = TOOLS_BY_NAME.get(name)!;
       const out = t.run(ctx, t.parse({})) as { source?: string | string[]; error?: string; weeks?: number };
       console.log(`  ${name.padEnd(18)} ${out.error ?? [out.source].flat().join("; ")}${typeof out.weeks === "number" ? ` (${out.weeks} weeks)` : ""}`);
