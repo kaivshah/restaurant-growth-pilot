@@ -16,6 +16,7 @@ import { isBrandSafe } from "@/lib/offers";
 import { type Place, type PlacesProvider, SEARCHES, placesFromEnv } from "@/lib/places";
 import type { ParsedReport } from "@/lib/reports";
 import { loadMenuContext } from "@/lib/menu";
+import { calendarFor } from "@/lib/analyst/calendar";
 import { EVENT_WINDOW_DAYS, categoryLabel, scoreEvent, scoreLead } from "./score";
 
 /** Google's terms: Place content is refreshed or removed after 30 days. */
@@ -446,7 +447,9 @@ async function leadContext(restaurant: Restaurant, now: Date) {
     menuCtx,
   );
   const leads = [...(daily?.leads ?? []), ...excluded.map(toLeadInfo)];
-  const ctx: LeadContext = { ...base, leads, events: daily?.events ?? [], brief: daily?.brief ?? [] };
+  const events = daily?.events ?? [];
+  const calendar = calendarFor(now, events.map((e) => ({ title: e.title, date: e.date, daysAhead: e.daysAhead, category: e.category, venue: e.venueName, attendance: e.attendance, distanceMiles: e.distanceMiles })));
+  const ctx: LeadContext = { ...base, calendar, focus: restaurant.focus, leads, events, brief: daily?.brief ?? [] };
   return { leads, ctx };
 }
 

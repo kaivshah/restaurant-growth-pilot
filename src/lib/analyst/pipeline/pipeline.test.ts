@@ -26,6 +26,8 @@ const ctxFor = (reports: ParsedReport[]): AnalystContext => ({
   pastDecisions: [],
   menu: { priced: 0, total: 0, lines: [], items: [] },
   inventoryMap: {},
+  calendar: null,
+  focus: null,
 });
 
 describe("formulas the AI shows its working for", () => {
@@ -83,5 +85,26 @@ describe("the offer pipeline", () => {
     expect(out.status).toBe("DONE");
     expect(out.stages?.strategy.retried).toBe(true);
     expect(out.rejected.filter((r) => r.kind === "candidate").length).toBeGreaterThan(3);
+  });
+});
+
+describe("owner voice and fresh runs", () => {
+  it("puts the owner's focus and steer in the inventor's ask, and a fresh run skips the cached ideas but not the diagnosis", async () => {
+    const ctx = ctxFor(await load(SAMPLE, FILES));
+    ctx.focus = "Dinner is weak and we just hired an evening crew";
+    const asks: string[] = [];
+    const model = fakePipeline();
+    const spy = { ...model, start: (o: Parameters<typeof model.start>[0]) => (asks.push(o.user), model.start(o)) };
+    const store = new Map<string, unknown>();
+    const cache = { get: async (k: string) => store.get(k) ?? null, set: async (k: string, v: unknown) => void store.set(k, v) };
+    await runPipeline(spy, ctx, { cache, steer: "ideas for Tuesdays" });
+    const invent = asks.find((a) => a.startsWith("Stage: STRATEGISE"))!;
+    expect(invent).toMatch(/What matters to the owner this month.*Dinner is weak/);
+    expect(invent).toMatch(/For this run the owner asks: ideas for Tuesdays/);
+    asks.length = 0;
+    const again = await runPipeline(spy, ctx, { cache, steer: "ideas for Tuesdays", fresh: true });
+    expect(again.stages?.diagnosis.cached).toBe(true);
+    expect(again.stages?.strategy.cached).toBe(false);
+    expect(asks.some((a) => a.startsWith("Stage: DIAGNOSE"))).toBe(false);
   });
 });

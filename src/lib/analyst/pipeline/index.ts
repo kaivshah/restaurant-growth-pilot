@@ -26,8 +26,10 @@ export interface StageCache {
 
 export interface PipelineOptions {
   existingTitles?: string[];
-  /** What the owner asked for this time, e.g. "ideas for dinner" (phase 2) */
+  /** What the owner asked for this time, e.g. "ideas for dinner" */
   steer?: string;
+  /** "Give me different ideas": skip the cached ideas and judgement (the diagnosis is still reused) */
+  fresh?: boolean;
   cache?: StageCache;
   limits?: RunLimits;
   onStage?: (stage: "diagnose" | "strategise" | "critique" | "verify", note: string) => void | Promise<void>;
@@ -81,10 +83,12 @@ export async function runPipeline(model: AnalystModel, ctx: AnalystContext, opts
   const prefetch = prefetchFor(ctx);
   const base = { system: PIPELINE_SYSTEM, user: `Restaurant: ${ctx.restaurant.name}${ctx.restaurant.kind === "FRANCHISE" && ctx.restaurant.brand ? ` (${ctx.restaurant.brand} franchise)` : ""}. Opening hours as entered: ${ctx.restaurant.openingHours ?? "not given"}.`, ctx, tools: [] as typeof DATA_TOOLS, prefetchTools: DATA_TOOLS, prefetch, oneShot: true, limits: { maxTurns: 2, ...opts.limits } };
   // The data every stage reads, for the cache keys (the prefetched results are deterministic for the same context).
-  const dataKey = hash([model.provider, model.model, ctx.reports.map((r) => r.report), ctx.rules, ctx.menu.lines, ctx.pastDecisions]);
+  const dataKey = hash([model.provider, model.model, ctx.reports.map((r) => r.report), ctx.rules, ctx.menu.lines, ctx.pastDecisions, ctx.focus, ctx.calendar?.today]);
+  // A fresh run keeps the diagnosis and makes new ideas: its invent/judge keys carry a one-off salt.
+  const salt = opts.fresh ? String(Date.now()) : "";
 
   async function stage<S>(name: string, ask: string, submit: { name: string; description: string; jsonSchema: Record<string, unknown>; schema: ZodType<S, ZodTypeDef, unknown> }) {
-    const key = `stage:${name}:${hash([dataKey, ask])}`;
+    const key = `stage:${name}:${hash([dataKey, ask, name === "diagnose" ? "" : salt])}`;
     const cached = (await opts.cache?.get(key)) as { submission: S; toolLog: ToolLog } | null;
     if (cached) return { res: { status: "DONE" as const, submission: cached.submission, toolLog: cached.toolLog, toolCalls: 0, turns: 0, inputTokens: 0, outputTokens: 0 } as LoopResult<S>, cached: true };
     const res = await runToolLoop<AnalystContext, S>(model, { ...base, ask, submit });
@@ -194,7 +198,8 @@ function verify(list: Candidate[], ctx: AnalystContext, log: ToolLog, existingTi
   const accepted: Candidate[] = [];
   const rejected: Rejected[] = [];
   const items = new Map(already.map((p) => [itemKey(p.item), p.title]));
-  const targets = new Map(already.map((p) => [p.target, p.title]));
+  const targetKey = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  const targets = new Map(already.map((p) => [targetKey(p.target), p.title]));
   // Ideas the owner already decided on mustn't come back under a new name; within a run, item and target keep ideas apart.
   for (const c of list) {
     const problems = checkProposal(c, ctx, log);
@@ -202,14 +207,14 @@ function verify(list: Candidate[], ctx: AnalystContext, log: ToolLog, existingTi
     if (dup) problems.push(`Too similar to "${dup}", which you already decided on.`);
     const sameItem = items.get(itemKey(c.item));
     if (sameItem) problems.push(`Gives away the same item as "${sameItem}"; each idea needs a different item.`);
-    const sameTarget = targets.get(c.target);
+    const sameTarget = targets.get(targetKey(c.target));
     if (sameTarget) problems.push(`Fixes the same problem (${c.target}) as "${sameTarget}".`);
     if (c.for_sign_up && [...already, ...accepted].some((q) => q.for_sign_up)) problems.push("There is already a sign-up gift.");
     if (problems.length) rejected.push({ kind: "candidate", title: c.title, reasons: problems });
     else {
       accepted.push(c);
       items.set(itemKey(c.item), c.title);
-      targets.set(c.target, c.title);
+      targets.set(targetKey(c.target), c.title);
     }
   }
   return { accepted, rejected };

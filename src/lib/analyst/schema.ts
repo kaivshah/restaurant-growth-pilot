@@ -2,8 +2,8 @@ import { z } from "zod";
 
 export const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 /** In-store offers for customers who visit. Catering offers are decided per pitch (see leads). */
-export const MECHANICS = ["free_item", "amount_off", "percent_off", "bundle_price", "bogo", "loyalty_reward"] as const;
-export const AUDIENCES = ["email_list", "in_store_qr", "email_and_qr"] as const;
+export const MECHANICS = ["free_item", "amount_off", "percent_off", "bundle_price", "bogo", "loyalty_reward", "other"] as const;
+export const AUDIENCES = ["email_list", "in_store_qr", "email_and_qr", "walk_ins"] as const;
 /** What the offer is for: bring in new customers, raise what visitors spend, or bring regulars back. */
 export const GOALS = ["attract", "grow_sales", "retain"] as const;
 /** The store problem an offer is meant to fix; each proposal must fix a different one. */
@@ -34,7 +34,8 @@ export const Finding = z.object({
 
 export const Proposal = z.object({
   title: z.string().max(80).describe('Short name of the offer, e.g. "Free fountain drink with any footlong, Mon–Thu 3–5 pm"'),
-  target: z.enum(TARGETS).describe("The store problem this offer fixes"),
+  target: z.string().max(40).describe(`The store problem this offer fixes, in a few words: one of ${TARGETS.join(", ")} or your own, e.g. "tuesday_lunch" or "thanksgiving_week"`),
+  mechanic_detail: z.string().max(120).optional().describe('For mechanic "other": how the deal works, e.g. "second footlong for $5 when ordered together"'),
   goal: z.enum(GOALS).describe("attract new customers, grow_sales from visitors, or retain regulars"),
   mechanic: z.enum(MECHANICS),
   item: z.string().max(60).describe("What is free or discounted"),
@@ -109,7 +110,8 @@ export const SUBMIT_SCHEMA = {
         type: "object",
         properties: {
           title: { type: "string" },
-          target: { type: "string", enum: [...TARGETS] },
+          target: { type: "string" },
+          mechanic_detail: { type: "string" },
           goal: { type: "string", enum: [...GOALS] },
           mechanic: { type: "string", enum: [...MECHANICS] },
           item: { type: "string" },

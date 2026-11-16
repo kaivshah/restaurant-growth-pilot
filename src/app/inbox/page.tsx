@@ -8,7 +8,7 @@ import { db } from "@/lib/db";
 import { latestSuggestions } from "@/lib/leads";
 import { REWRITE_LIMIT, jobState, kickJobs, requeueStaleJobs } from "@/lib/drafts";
 import { requireRestaurant } from "@/lib/restaurant";
-import { approveDraft, refreshIdeas, setSkipReason, skipDraft, undoDraft } from "./actions";
+import { approveDraft, differentIdeas, refreshIdeas, setSkipReason, skipDraft, undoDraft } from "./actions";
 import { AiStatus } from "./ai-status";
 import { AutoRefresh } from "./auto-refresh";
 import { CateringTab } from "./catering";
@@ -90,11 +90,19 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
           </p>
         </div>
         {tab === "offers" && (
-          <form action={refreshIdeas}>
-            <button type="submit" disabled={working} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60">
-              {working ? "Preparing ideas…" : "Refresh ideas"}
-            </button>
-          </form>
+          <div className="flex flex-wrap items-center gap-2">
+            <form action={differentIdeas} className="flex items-center gap-2">
+              <input name="steer" maxLength={300} placeholder="Ideas for… e.g. dinner, Tuesdays, drinks" className="h-11 w-56 rounded-field border border-field bg-surface px-3 text-sm" aria-label="What kind of ideas" disabled={working} />
+              <button type="submit" disabled={working} className="min-h-11 rounded-field bg-primary px-4 font-bold text-white hover:bg-primary-hover disabled:opacity-60">
+                {working ? "Preparing ideas…" : "Different ideas"}
+              </button>
+            </form>
+            <form action={refreshIdeas}>
+              <button type="submit" disabled={working} className="min-h-11 rounded-field border border-field bg-surface px-4 font-bold hover:border-primary disabled:opacity-60" title="Redo the analysis if your reports or rules changed">
+                Refresh
+              </button>
+            </form>
+          </div>
         )}
       </div>
 

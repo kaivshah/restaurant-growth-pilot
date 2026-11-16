@@ -13,6 +13,7 @@ type Defaults = {
   allowPercentOff: boolean;
   allowBogo: boolean;
   useBrandCateringMenu: boolean;
+  focus: string;
 };
 
 const APPROVAL = [
@@ -103,6 +104,14 @@ export function RulesForm({ defaults, discountPct, settings = false }: { default
             ))}
           </div>
         </fieldset>
+
+        <div className="flex flex-col gap-2">
+          <label htmlFor="focus" className="font-bold">
+            What matters to you this month? <span className="font-normal text-muted">(optional)</span>
+          </label>
+          <p className="text-sm text-muted">In your own words. The AI makes at least two offers serve it: &ldquo;push dinner&rdquo;, &ldquo;Tuesdays are dead&rdquo;, &ldquo;new gym opened next door&rdquo;, &ldquo;clear the cookie stock&rdquo;.</p>
+          <textarea id="focus" name="focus" defaultValue={defaults.focus} maxLength={400} rows={3} className="w-full rounded-field border border-field bg-surface px-4 py-3 text-ink placeholder:text-muted/80" placeholder="e.g. Dinner is weak and we just hired an evening crew. Also the new office block on Elm St opens this month." />
+        </div>
 
         <label htmlFor="useBrandCateringMenu" className="grid cursor-pointer grid-cols-[22px_minmax(0,1fr)] gap-3 rounded-2xl bg-ground px-5 py-4">
           <input id="useBrandCateringMenu" name="useBrandCateringMenu" type="checkbox" defaultChecked={defaults.useBrandCateringMenu} className="mt-0.5 size-5 accent-primary" />

@@ -92,7 +92,8 @@ export function checkProposal(p: Proposal, ctx: AnalystContext, log: ToolLog): s
   problems.push(...checkTextNumbers(`${p.title} ${p.why} ${p.expected_effect}`, log, extra));
 
   const brandSafe = ctx.rules.promoApproval !== "YES";
-  const priceCut = p.mechanic === "amount_off" || p.mechanic === "percent_off" || p.mechanic === "bundle_price";
+  const priceCut = p.mechanic === "amount_off" || p.mechanic === "percent_off" || p.mechanic === "bundle_price" || (p.mechanic === "other" && !/free/i.test(p.mechanic_detail ?? ""));
+  if (p.mechanic === "other" && !p.mechanic_detail) problems.push('An "other" deal needs mechanic_detail saying how it works.');
   if (priceCut && brandSafe) problems.push("Price cuts aren't allowed until the owner confirms their brand allows local promotions.");
   if (priceCut && !ctx.rules.allowPercentOff) problems.push("The owner hasn't allowed price cuts.");
   if (p.mechanic === "bogo" && (!ctx.rules.allowBogo || brandSafe)) problems.push("The owner hasn't allowed buy-one-get-one.");

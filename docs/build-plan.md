@@ -60,7 +60,7 @@ Two further dials if needed: `medium` effort everywhere (~$6/month); merge Diagn
 |---|---|---|
 | 1 | Menu and item data | done (2026-11-15) |
 | 3 | The pipeline (Diagnostician → Strategist → Critic → Verifier → Copywriter) | done (2026-11-15) |
-| 2 | Owner voice, calendar and freedom | pending |
+| 2 | Owner voice, calendar and freedom | done (2026-11-16); weather not added |
 | 4 | Offer lifecycle and the results loop | pending |
 | 5 | Catering upgrades | pending |
 | 6 | Prove it on real data (eval set, cost/latency page) | pending |

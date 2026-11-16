@@ -132,13 +132,13 @@ export async function clearDailyContext(restaurantId: string, now = new Date()) 
  * (the "Suggest" button on the Leads page), and catering offers are decided
  * per pitch, when the owner clicks Generate pitch.
  */
-export async function runDailyPlan(restaurantId: string, now = new Date()): Promise<string> {
+export async function runDailyPlan(restaurantId: string, now = new Date(), opts: { steer?: string; fresh?: boolean } = {}): Promise<string> {
   const { progress, buildDraftsFor } = await import("@/lib/drafts");
   await progress(restaurantId, "DAILY", "Reading your reports…");
   const ctx = await dailyContext(restaurantId, now);
   if (!ctx) return "Restaurant not found.";
   await progress(restaurantId, "DAILY", "AI is studying your reports for in-store offers…");
-  return `Offers: ${await buildDraftsFor(restaurantId)}`;
+  return `Offers: ${await buildDraftsFor(restaurantId, opts)}`;
 }
 
 /**

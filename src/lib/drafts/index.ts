@@ -7,6 +7,7 @@ import { AiBusyError, AiConfigError, type FactsPacket, type CallLog, missingAiRe
 import { type OfferCandidate, isBrandSafe } from "@/lib/offers";
 import type { ParsedReport } from "@/lib/reports";
 import { inventoryLineNames, loadMenuContext } from "@/lib/menu";
+import { calendarFor } from "@/lib/analyst/calendar";
 
 /** Most new drafts one restaurant can get per day, to keep AI costs predictable. */
 export const DAILY_DRAFT_CAP = Number(process.env.DAILY_DRAFT_CAP ?? 40);
@@ -70,7 +71,9 @@ function stageCache(restaurantId: string) {
  */
 const ANALYST_VERSION = 5;
 
-async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof usableReports>>["rows"], opts: { steer?: string } = {}): Promise<IdeaResult> {
+export type IdeaOptions = { steer?: string; fresh?: boolean };
+
+async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof usableReports>>["rows"], opts: IdeaOptions = {}): Promise<IdeaResult> {
   // Every offer comes from the AI analyst's study of the reports: no fixed ideas.
   const baseline: OfferCandidate[] = [];
   const analyst = analystFromEnv();
@@ -83,11 +86,17 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
   });
   const parsed = rows.map((r) => r.data as unknown as ParsedReport);
   const menuCtx = await loadMenuContext(restaurant.id, inventoryLineNames(parsed));
+  const now = new Date();
+  const upcoming = await db.event.findMany({ where: { restaurantId: restaurant.id, startsAt: { gte: now, lte: new Date(now.getTime() + 30 * 86_400_000) } }, orderBy: { fitScore: "desc" }, take: 20 });
+  const calendar = calendarFor(
+    now,
+    upcoming.map((e) => ({ title: e.title, date: e.startsAt.toISOString().slice(0, 10), daysAhead: Math.round((e.startsAt.getTime() - now.getTime()) / 86_400_000), category: e.category, venue: e.venueName, attendance: e.attendance, distanceMiles: e.distanceMiles })),
+  );
   const ctx: AnalystContext = buildContext(
     restaurant,
     rows.map((r) => ({ report: r.data as unknown as ParsedReport, status: r.status === "CONFIRMED" ? "CONFIRMED" : "READ" })),
     decisions.map((d) => ({ title: d.title, status: d.status as "APPROVED" | "SKIPPED", skipReason: d.skipReason, source: d.source })),
-    menuCtx,
+    { ...menuCtx, calendar, focus: restaurant.focus },
   );
   const dataHash = createHash("sha256")
     .update(
@@ -99,6 +108,10 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
         rules: ctx.rules,
         restaurant: ctx.restaurant,
         menu: menuCtx.hash,
+        focus: restaurant.focus,
+        day: calendar.today,
+        steer: opts.steer ?? null,
+        fresh: opts.fresh ? Date.now() : 0,
         decisions: decisions.map((d) => [d.id, d.status, d.skipReason]),
       }),
     )
@@ -123,6 +136,7 @@ async function ideasFor(restaurant: Restaurant, rows: Awaited<ReturnType<typeof 
   const outcome = await runPipeline(analyst, ctx, {
     existingTitles: decisions.map((d) => d.title),
     steer: opts.steer,
+    fresh: opts.fresh,
     cache: stageCache(restaurant.id),
     onStage: (stage, note) => progress(restaurant.id, "OFFERS", `AI ${stage === "diagnose" ? "diagnosis" : stage === "strategise" ? "ideas" : stage === "critique" ? "critique" : "checks"}: ${note}`),
   });
@@ -214,7 +228,7 @@ export async function draftsToday(restaurantId: string) {
 }
 
 /** Builds offer drafts for one restaurant. Returns a short summary for the job record. */
-export async function buildDraftsFor(restaurantId: string): Promise<string> {
+export async function buildDraftsFor(restaurantId: string, opts: IdeaOptions = {}): Promise<string> {
   const restaurant = await db.restaurant.findUnique({ where: { id: restaurantId } });
   if (!restaurant) return "Restaurant not found.";
   const { rows, anyConfirmed } = await usableReports(restaurantId);
@@ -222,7 +236,7 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
 
   const provider = providerFromEnv();
   if (!provider) return `AI not set up. ${missingAiReason()}`;
-  const { offers, analysisRunId, note, failed: analysisFailed } = await ideasFor(restaurant, rows);
+  const { offers, analysisRunId, note, failed: analysisFailed } = await ideasFor(restaurant, rows, opts);
   let created = 0;
   let reused = 0;
   const failed: string[] = [];
@@ -292,9 +306,9 @@ export async function buildDraftsFor(restaurantId: string): Promise<string> {
  * is already waiting. force makes a LEADS job search the area again even if
  * the last scan is recent.
  */
-export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFFERS", force = false, options?: { web?: boolean }) {
+export async function enqueueDraftJob(restaurantId: string, kind: JobKind = "OFFERS", force = false, options?: { web?: boolean; steer?: string; fresh?: boolean }) {
   const waiting = await db.draftJob.findFirst({ where: { restaurantId, kind, status: "QUEUED" } });
-  const payload = options?.web ? { web: true } : undefined;
+  const payload = options?.web ? { web: true } : options?.steer || options?.fresh ? { steer: options.steer, fresh: options.fresh } : undefined;
   // Asking again means "try now", even if the job was waiting for the AI.
   if (waiting) return db.draftJob.update({ where: { id: waiting.id }, data: { force: waiting.force || force, runAfter: null, ...(payload ? { payload } : {}) } });
   return db.draftJob.create({ data: { restaurantId, kind, force, payload } });
@@ -442,7 +456,7 @@ async function drain(lane: JobKind[], maxJobs: number) {
             : next.kind === "SUGGEST"
               ? await leads!.suggestLeads(next.restaurantId, new Date(), { force: next.force })
               : next.kind === "DAILY"
-                ? await (await import("@/lib/daily")).runDailyPlan(next.restaurantId)
+                ? await (await import("@/lib/daily")).runDailyPlan(next.restaurantId, new Date(), (next.payload as IdeaOptions | null) ?? {})
               : next.kind === "PITCH"
                 ? await leads!.generatePitches(next.restaurantId, (next.payload as PitchTarget[] | null) ?? [])
                 : next.kind === "FOLLOWUPS"

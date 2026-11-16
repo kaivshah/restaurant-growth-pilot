@@ -36,6 +36,7 @@ export default async function RulesStep({ searchParams }: { searchParams: Promis
             allowPercentOff: restaurant.allowPercentOff,
             allowBogo: restaurant.allowBogo,
             useBrandCateringMenu: restaurant.useBrandCateringMenu,
+            focus: restaurant.focus ?? "",
           }}
         />
         <aside className="flex flex-col gap-4">

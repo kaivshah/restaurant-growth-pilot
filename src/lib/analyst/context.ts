@@ -3,6 +3,7 @@ import { REPORT_LABELS } from "@/lib/reports";
 import { averagedReport } from "@/lib/insights";
 import type { MenuFacts } from "@/lib/menu";
 import type { InventoryMap } from "@/lib/menu/inventory";
+import type { calendarFor } from "./calendar";
 
 /** Everything the analyst's tools can read. Built once per run from Postgres. */
 export interface AnalystContext {
@@ -29,6 +30,10 @@ export interface AnalystContext {
   menu: MenuFacts;
   /** Inventory report lines linked to menu items and kinds */
   inventoryMap: InventoryMap;
+  /** Today, the season, holidays ahead and the scanned local events */
+  calendar: ReturnType<typeof calendarFor> | null;
+  /** What the owner wants this month, in their words */
+  focus: string | null;
 }
 
 export const EMPTY_MENU: MenuFacts = { priced: 0, total: 0, lines: [], items: [] };

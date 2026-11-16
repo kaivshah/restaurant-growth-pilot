@@ -40,6 +40,7 @@ export function prefetchFor(ctx: AnalystContext): { name: string }[] {
   return [
     { name: "list_reports" },
     { name: "get_rules" },
+    ...(ctx.calendar ? [{ name: "get_calendar" }] : []),
     ...(ctx.menu.priced ? [{ name: "get_menu" }] : []),
     { name: "get_week_summary" },
     ...(has("dayPart") ? [{ name: "get_hourly_sales" }, { name: "get_day_totals" }] : []),

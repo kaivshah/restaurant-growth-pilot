@@ -49,6 +49,8 @@ function ctxFor(reports: ParsedReport[], rules: Partial<AnalystContext["rules"]>
     pastDecisions: [],
     menu: { priced: 0, total: 0, lines: [], items: [] },
     inventoryMap: {},
+    calendar: null,
+    focus: null,
   };
 }
 

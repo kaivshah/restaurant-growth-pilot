@@ -187,6 +187,8 @@ function leadCtx(over: { rules?: Partial<LeadContext["rules"]>; status?: LeadCon
     pastDecisions: [],
     menu: { priced: 0, total: 0, lines: [], items: [] },
     inventoryMap: {},
+    calendar: null,
+    focus: null,
     leads: [
       {
         id: "L1",

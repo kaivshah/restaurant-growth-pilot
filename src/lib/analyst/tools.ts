@@ -179,6 +179,14 @@ export const DATA_TOOLS: ToolDef<unknown>[] = [
   }),
 
   tool({
+    name: "get_calendar",
+    description: "Today's date and weekday, the season, the school calendar in broad strokes, US holidays in the next six weeks with how a restaurant can use them, and the local events the area scan found in the next 30 days. For timing offers: a holiday week, a game day, an event crowd.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parse: () => ({}),
+    run: (ctx) => ctx.calendar ?? { error: "No calendar for this run." },
+  }),
+
+  tool({
     name: "get_menu",
     description: "The store's menu with its local prices, by category, and catering platters with servings. Only items listed here may be named, given away or discounted; use these prices as retail values.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },

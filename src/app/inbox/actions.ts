@@ -193,6 +193,15 @@ export async function refreshIdeas() {
   revalidatePath("/inbox");
 }
 
+/** "Give me different ideas", or "Ideas for …": a fresh set from the same diagnosis, steered by the owner's words. */
+export async function differentIdeas(formData: FormData) {
+  const restaurant = await requireRestaurant();
+  const steer = String(formData.get("steer") ?? "").trim().slice(0, 300);
+  await enqueueDraftJob(restaurant.id, "DAILY", false, { fresh: true, ...(steer ? { steer } : {}) });
+  after(() => kickJobs());
+  revalidatePath("/inbox");
+}
+
 // ---------- Sending, follow-ups and the pipeline (milestone 3b) ----------
 
 /** Stop a pitch's remaining emails (the ones already sent stay sent). */

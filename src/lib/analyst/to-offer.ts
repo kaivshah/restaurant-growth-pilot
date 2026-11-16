@@ -46,6 +46,7 @@ const AUDIENCE_TEXT: Record<Proposal["audience"], string> = {
   email_list: "Your email list",
   in_store_qr: "In-store customers, via the counter QR card",
   email_and_qr: "Your email list, plus the counter QR card",
+  walk_ins: "Everyone at the counter (signage and staff)",
 };
 
 /** The inbox label: what the offer is for. */
@@ -72,7 +73,7 @@ export function slug(s: string) {
 /** Turns a verified AI proposal into an inbox offer. */
 export function proposalToOffer(p: Proposal, ctx: AnalystContext, log: ToolLog): OfferCandidate {
   const est = estimateOfferCost(ctx, { mechanic: p.mechanic, value_usd: p.value_usd, percent_off: p.percent_off, visits_required: p.visits_required });
-  const needsCode = p.audience !== "in_store_qr";
+  const needsCode = p.audience !== "in_store_qr" && p.audience !== "walk_ins";
   const brandSafe = ctx.rules.promoApproval !== "YES";
   const when = `${daysShort(p.days)}, ${hoursText(p.start_hour, p.end_hour)}`;
   const cost =
@@ -101,9 +102,10 @@ export function proposalToOffer(p: Proposal, ctx: AnalystContext, log: ToolLog):
       `Ends after ${p.duration_weeks} ${p.duration_weeks === 1 ? "week" : "weeks"}`,
       ...(brandSafe ? ["Check with your brand before sending"] : []),
     ],
-    copyLabel: p.audience === "in_store_qr" ? "QR card headline" : "Email subject",
+    copyLabel: p.audience === "in_store_qr" ? "QR card headline" : p.audience === "walk_ins" ? "Counter sign headline" : "Email subject",
     facts: [
       p.title,
+      ...(p.mechanic === "other" && p.mechanic_detail ? [p.mechanic_detail] : []),
       `${daysLong(p.days)}, ${hoursText(p.start_hour, p.end_hour)}`,
       `Valid for ${p.duration_weeks} ${p.duration_weeks === 1 ? "week" : "weeks"}`,
       ...(p.qualifying_purchase && p.qualifying_purchase.toLowerCase() !== "none" ? [`With ${p.qualifying_purchase}`] : []),

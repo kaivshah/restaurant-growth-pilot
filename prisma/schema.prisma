@@ -114,6 +114,8 @@ model Restaurant {
   menuItems            MenuItem[]
   /// When the owner last confirmed the menu and its prices
   menuConfirmedAt      DateTime?
+  /// What the owner wants this month, in their words, for the AI ("push dinner", "we're overstaffed Mondays")
+  focus                String?
 
   @@index([ownerId])
 }

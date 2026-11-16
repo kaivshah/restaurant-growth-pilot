@@ -272,6 +272,7 @@ export async function saveRules(_prev: FormState, formData: FormData): Promise<F
       allowPercentOff: on("allowPercentOff"),
       allowBogo: on("allowBogo"),
       useBrandCateringMenu: on("useBrandCateringMenu"),
+      focus: String(formData.get("focus") ?? "").trim().slice(0, 400) || null,
       setupCompletedAt: restaurant.setupCompletedAt ?? new Date(),
     },
   });

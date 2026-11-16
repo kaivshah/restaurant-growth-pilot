@@ -80,7 +80,7 @@ export function buildContext(
   restaurant: AnalystContext["restaurant"] & AnalystContext["rules"],
   reports: AnalystContext["reports"],
   pastDecisions: AnalystContext["pastDecisions"],
-  extras: { menu?: MenuFacts; inventoryMap?: InventoryMap } = {},
+  extras: { menu?: MenuFacts; inventoryMap?: InventoryMap; calendar?: AnalystContext["calendar"]; focus?: string | null } = {},
 ): AnalystContext {
   return {
     restaurant: {
@@ -104,5 +104,7 @@ export function buildContext(
     pastDecisions,
     menu: extras.menu ?? EMPTY_MENU,
     inventoryMap: extras.inventoryMap ?? {},
+    calendar: extras.calendar ?? null,
+    focus: extras.focus ?? null,
   };
 }

@@ -124,7 +124,7 @@ const CATERING_TOOLS: ToolDef<unknown, CateringContext>[] = [
       figures: [...ctx.brief, ...ctx.findings.map((f) => f.detail)].flatMap((b) => [...b.matchAll(/\d[\d,]*(?:\.\d+)?/g)].map((m) => Number(m[0].replace(/,/g, "")))),
     }),
   },
-  ...(DATA_TOOLS.filter((t) => ["get_rules", "get_menu", "get_week_summary", "get_sales_mix", "get_hourly_sales", "estimate_offer_cost"].includes(t.name)) as ToolDef<unknown, CateringContext>[]),
+  ...(DATA_TOOLS.filter((t) => ["get_rules", "get_menu", "get_calendar", "get_week_summary", "get_sales_mix", "get_hourly_sales", "estimate_offer_cost"].includes(t.name)) as ToolDef<unknown, CateringContext>[]),
 ];
 
 export const CATERING_SYSTEM = `You decide the catering offer a small restaurant makes to each business or event the owner chose to pitch. The goal is a first catering order, and repeat orders after it.
@@ -221,7 +221,7 @@ async function decideBatch(model: AnalystModel, ctx: CateringContext, limits: Ru
       ctx: sub,
       tools: [],
       prefetchTools: CATERING_TOOLS,
-      prefetch: [{ name: "get_rules" }, ...(ctx.menu.priced ? [{ name: "get_menu" }] : []), { name: "list_pitch_targets" }, { name: "get_store_analysis" }, { name: "get_week_summary" }, { name: "get_sales_mix" }, { name: "get_hourly_sales" }],
+      prefetch: [{ name: "get_rules" }, ...(ctx.menu.priced ? [{ name: "get_menu" }] : []), ...(ctx.calendar ? [{ name: "get_calendar" }] : []), { name: "list_pitch_targets" }, { name: "get_store_analysis" }, { name: "get_week_summary" }, { name: "get_sales_mix" }, { name: "get_hourly_sales" }],
       oneShot: true,
       submit: { name: "submit_catering_offers", description: "Submit one catering offer per target.", jsonSchema: SUBMIT_JSON, schema: Submission },
       limits: { maxTurns: 2, ...limits },
